@@ -5,6 +5,7 @@ exitron-pipeline.py => Exitron identification, quantification and comparison pip
 """
 
 from natsort import natsorted
+from collections import Counter
 import argparse
 import subprocess
 import os
@@ -77,7 +78,7 @@ def identify_exitrons(work_dir, gtf_file, samples, junction_format="STAR", junct
 	with open("{}all_junctions.N{}.bed".format(work_dir, min_support), 'w') as fout:
 		for j in natsorted(all_junctions):
 			c, coord, strand = j.split(':')
-			fout.write( "{]\t{}\t{}\tJUNCTION\t1000\t{}\n".format(c, coord.split('-')[0], coord.split('-')[1], strand) )
+			fout.write( "{}\t{}\t{}\tJUNCTION\t1000\t{}\n".format(c, coord.split('-')[0], coord.split('-')[1], strand) )
 
 	# Intersect the junctions with the provided CDS GTF annotation
 	# Only strand-specific (-s) and full-length matches (-f 1) are taken
@@ -107,12 +108,12 @@ def identify_exitrons(work_dir, gtf_file, samples, junction_format="STAR", junct
 
 	infoOut.close(), bedOut.close()
 
-	subprocess.call("rm -f "+work_dir+" junctions_GTF_map.tmp", shell=True)
+	subprocess.call("rm -f "+work_dir+"junctions_GTF_map.tmp", shell=True)
 
 if __name__ == '__main__':
 
 	parser = argparse.ArgumentParser(description=__doc__)
-	parser.add_argument('-v', '--version', action='version', version='0.1.0')
+	parser.add_argument('-v', '--version', action='version', version='0.1.1')
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
 
 	subparsers = parser.add_subparsers(dest='command', help="Sub-command help.")
