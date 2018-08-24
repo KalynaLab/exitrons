@@ -23,7 +23,7 @@ def yield_junctions(f, file_format="STAR"):
 					'start': cols[1],
 					'end': cols[2],
 					'junction_id': cols[3],
-					'uniq_reads': int(cols[4]),
+					'depth': int(cols[4]),
 					'strand': cols[5],
 					'rgb': cols[8],
 					'block_size': cols[9],
@@ -43,7 +43,8 @@ def yield_junctions(f, file_format="STAR"):
 					'is_annotated': cols[5] == '1',
 					'uniq_reads': int(cols[6]),
 					'multimap_reads': int(cols[7]),
-					'max_overhang': int(cols[8])
+					'max_overhang': int(cols[8]),
+					'depth': int(cols[6]) + int(cols[7])
 					})
 
 		except IndexError: pass
@@ -60,29 +61,30 @@ def get_shared_junctions(group_junctions, min_support=3):
 	# Return those junctions with >= min_support occurences
 	return set([ x for x in jN if jN[x] >= min_support ])
 
-def identify_exitrons(work_dir, gtf_file, samples, junction_format="STAR", junction_filename="SJ.out.tab", min_support=3):
+def identify_exitrons(work_dir, args):
 	""" Intersect the shared junctions with min_support occurences per 
 	samples group with the CDS GTF annotation. """
 
 	# Parse the samples per group
 	groups = {}
-	for line in open(samples):
+	for line in open(args.samples):
 		group_id, path = line.rstrip().split('\t')[:2]
-		try: groups[group_id].append( { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["uniq_reads"] for j in yield_junctions(path+junction_filename, junction_format) } )
-		except KeyError: groups[group_id] = [ { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["uniq_reads"] for j in yield_junctions(path+junction_filename, junction_format) } ]
+		junction_file = path+args.junction_filename
+		try: groups[group_id].append( { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) if j["depth"] >= args.min_coverage } )
+		except KeyError: groups[group_id] = [ { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) if j["depth"] >= args.min_coverage } ]
 
 	# Get all junctions with at least min_support occurences per group
-	all_junctions = set.union(*[ get_shared_junctions(groups[x], min_support) for x in groups ])
+	all_junctions = set.union(*[ get_shared_junctions(groups[x], args.min_support) for x in groups ])
 
 	# Output all selected junctions in bed format
-	with open("{}all_junctions.N{}.bed".format(work_dir, min_support), 'w') as fout:
+	with open("{}all_junctions.N{}.bed".format(work_dir, args.min_support), 'w') as fout:
 		for j in natsorted(all_junctions):
 			c, coord, strand = j.split(':')
 			fout.write( "{}\t{}\t{}\tJUNCTION\t1000\t{}\n".format(c, coord.split('-')[0], coord.split('-')[1], strand) )
 
 	# Intersect the junctions with the provided CDS GTF annotation
 	# Only strand-specific (-s) and full-length matches (-f 1) are taken
-	subprocess.call("bedtools intersect -s -f 1 -wa -wb -a {0}all_junctions.N{1}.bed -b {2} | awk -F\"\\t\" '{{ OFS=\"\t\"; print $1, $2, $3, $6, $10, $11, $NF }}' > {0}junctions_GTF_map.tmp".format(work_dir, min_support, gtf_file), shell=True)
+	subprocess.call("bedtools intersect -s -f 1 -wa -wb -a {0}all_junctions.N{1}.bed -b {2} | awk -F\"\\t\" '{{ OFS=\"\t\"; print $1, $2, $3, $6, $10, $11, $NF }}' > {0}junctions_GTF_map.tmp".format(work_dir, args.min_support, args.gtf), shell=True)
 
 	# Parse intersection
 	seen = set()
@@ -113,7 +115,7 @@ def identify_exitrons(work_dir, gtf_file, samples, junction_format="STAR", junct
 if __name__ == '__main__':
 
 	parser = argparse.ArgumentParser(description=__doc__)
-	parser.add_argument('-v', '--version', action='version', version='0.1.1')
+	parser.add_argument('-v', '--version', action='version', version='0.1.2')
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
 
 	subparsers = parser.add_subparsers(dest='command', help="Sub-command help.")
@@ -125,6 +127,7 @@ if __name__ == '__main__':
 	parser_a.add_argument('--junction-format', default="STAR", choices=["STAR", "TopHat2"], help="Junction file format.")
 	parser_a.add_argument('--junction-filename', default="SJ.out.tab", help="Junction filename.")
 	parser_a.add_argument('--min-support', type=int, default=3, help="Minimum number of replicates a junctions needs to occur in per group.")
+	parser_a.add_argument('--min-coverage', type=int, default=1, help="Minimum read coverage for a junction.")
 
 	args = parser.parse_args()
 
@@ -133,4 +136,4 @@ if __name__ == '__main__':
 	if not os.path.exists(work_dir): os.makedirs(work_dir)
 
 	if args.command == "identify-exitrons":
-		identify_exitrons(work_dir, args.gtf, args.samples, args.junction_format, args.junction_filename, args.min_support)
+		identify_exitrons(work_dir, args)
