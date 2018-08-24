@@ -5,7 +5,6 @@ exitron-pipeline.py => Exitron identification, quantification and comparison pip
 """
 
 from natsort import natsorted
-from collections import Counter
 import argparse
 import subprocess
 import time
@@ -13,7 +12,7 @@ import os
 
 def log_settings(work_dir, args, write_mode='a'):
 
-	args_order = ['version', 'work_dir', 'command', 'gtf', 'samples', 'junction_format', 'junction_filename', 'min_support', 'min_coverage', 'bs']
+	args_order = ['version', 'work_dir', 'command', 'gtf', 'samples', 'junction_format', 'junction_filename', 'min_count', 'min_coverage', 'min_total_coverage']
 
 	with open(work_dir+"Log.out", write_mode) as fout:
 		fout.write(time.asctime( time.localtime(time.time()) )+"\n")
@@ -60,20 +59,24 @@ def yield_junctions(f, file_format="STAR"):
 
 		except IndexError: pass
 
-def get_shared_junctions(group_junctions, min_support=3):
+def get_shared_junctions(group_junctions, min_count=3, min_coverage=1, min_total_coverage=1):
 
 	# Count the number of times a junction has been found
-	jN = Counter({})
+	jN = {}
 	for sample in group_junctions:
 		for j in sample:
-			if sample[j] >= 0:
-				jN[j] += 1
+			if sample[j] >= min_coverage:
+				try: 
+					jN[j]['N'] += 1
+					jN[j]['total_cov'] += sample[j]
+				except KeyError:
+					jN[j] = { 'N': 1, 'total_cov': sample[j] }
 
-	# Return those junctions with >= min_support occurences
-	return set([ x for x in jN if jN[x] >= min_support ])
+	# Return those junctions with >= min_count occurences
+	return set([ x for x in jN if jN[x]['N'] >= min_count and jN[x]['total_cov'] >= min_total_coverage ])
 
 def identify_exitrons(work_dir, args):
-	""" Intersect the shared junctions with min_support occurences per 
+	""" Intersect the shared junctions with min_count occurences per 
 	samples group with the CDS GTF annotation. """
 
 	# Parse the samples per group
@@ -81,21 +84,21 @@ def identify_exitrons(work_dir, args):
 	for line in open(args.samples):
 		group_id, path = line.rstrip().split('\t')[:2]
 		junction_file = path+args.junction_filename
-		try: groups[group_id].append( { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) if j["depth"] >= args.min_coverage } )
-		except KeyError: groups[group_id] = [ { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) if j["depth"] >= args.min_coverage } ]
+		try: groups[group_id].append( { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) } )
+		except KeyError: groups[group_id] = [ { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) } ]
 
-	# Get all junctions with at least min_support occurences per group
-	all_junctions = set.union(*[ get_shared_junctions(groups[x], args.min_support) for x in groups ])
+	# Get all junctions with at least min_count occurences per group
+	all_junctions = set.union(*[ get_shared_junctions(groups[x], args.min_count, args.min_coverage, args.min_total_coverage) for x in groups ])
 
 	# Output all selected junctions in bed format
-	with open("{}all_junctions.N{}.bed".format(work_dir, args.min_support), 'w') as fout:
+	with open(work_dir+"all_junctions.bed", 'w') as fout:
 		for j in natsorted(all_junctions):
 			c, coord, strand = j.split(':')
 			fout.write( "{}\t{}\t{}\tJUNCTION\t1000\t{}\n".format(c, coord.split('-')[0], coord.split('-')[1], strand) )
 
 	# Intersect the junctions with the provided CDS GTF annotation
 	# Only strand-specific (-s) and full-length matches (-f 1) are taken
-	subprocess.call("bedtools intersect -s -f 1 -wa -wb -a {0}all_junctions.N{1}.bed -b {2} | awk -F\"\\t\" '{{ OFS=\"\t\"; print $1, $2, $3, $6, $10, $11, $NF }}' > {0}junctions_GTF_map.tmp".format(work_dir, args.min_support, args.gtf), shell=True)
+	subprocess.call("bedtools intersect -s -f 1 -wa -wb -a {0}all_junctions.bed -b {1} | awk -F\"\\t\" '{{ OFS=\"\t\"; print $1, $2, $3, $6, $10, $11, $NF }}' > {0}junctions_GTF_map.tmp".format(work_dir, args.gtf), shell=True)
 
 	# Parse intersection
 	seen = set()
@@ -125,7 +128,7 @@ def identify_exitrons(work_dir, args):
 
 if __name__ == '__main__':
 
-	version = "0.1.3"
+	version = "0.1.4"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
@@ -133,13 +136,14 @@ if __name__ == '__main__':
 	subparsers = parser.add_subparsers(dest='command', help="Sub-command help.")
 
 	# Identify exitrons
-	parser_a = subparsers.add_parser('identify-exitrons', help="Map all junction with minimal --min-support occurences to the provided GTF annotation.")
+	parser_a = subparsers.add_parser('identify-exitrons', help="Map junctions to the provided GTF annotation.")
 	parser_a.add_argument('-g', '--gtf', required=True, help="CDS annotation gtf file.")
 	parser_a.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
 	parser_a.add_argument('--junction-format', default="STAR", choices=["STAR", "TopHat2"], help="Junction file format.")
 	parser_a.add_argument('--junction-filename', default="SJ.out.tab", help="Junction filename.")
-	parser_a.add_argument('--min-support', type=int, default=3, help="Minimum number of replicates a junctions needs to occur in per group.")
-	parser_a.add_argument('--min-coverage', type=int, default=1, help="Minimum read coverage for a junction.")
+	parser_a.add_argument('--min-count', type=int, default=3, help="Minimum number of replicates a junctions needs to occur in per group.")
+	parser_a.add_argument('--min-coverage', type=int, default=1, help="Minimum junction coverage in a single replicate.")
+	parser_a.add_argument('--min-total-coverage', type=int, default=1, help="Minimum junction coverage taken over all replicates of a group.")
 
 	args = parser.parse_args()
 
@@ -147,6 +151,6 @@ if __name__ == '__main__':
 	work_dir = args.work_dir if args.work_dir.endswith('/') else args.work_dir + '/'
 	if not os.path.exists(work_dir): os.makedirs(work_dir)
 
+	log_settings(work_dir, args, 'w')
 	if args.command == "identify-exitrons":
 		identify_exitrons(work_dir, args)
-		log_settings(work_dir, args, 'w')
