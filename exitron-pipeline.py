@@ -8,7 +8,18 @@ from natsort import natsorted
 from collections import Counter
 import argparse
 import subprocess
+import time
 import os
+
+def log_settings(work_dir, args, write_mode='a'):
+
+	args_order = ['version', 'work_dir', 'command', 'gtf', 'samples', 'junction_format', 'junction_filename', 'min_support', 'min_coverage', 'bs']
+
+	with open(work_dir+"Log.out", write_mode) as fout:
+		fout.write(time.asctime( time.localtime(time.time()) )+"\n")
+		for arg in args_order:
+			try: fout.write("--{}\t{}\n".format(arg.replace('_', '-'), getattr(args, arg)))
+			except AttributeError: pass
 
 def yield_junctions(f, file_format="STAR"):
 
@@ -114,8 +125,9 @@ def identify_exitrons(work_dir, args):
 
 if __name__ == '__main__':
 
+	version = "0.1.3"
 	parser = argparse.ArgumentParser(description=__doc__)
-	parser.add_argument('-v', '--version', action='version', version='0.1.2')
+	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
 
 	subparsers = parser.add_subparsers(dest='command', help="Sub-command help.")
@@ -137,3 +149,4 @@ if __name__ == '__main__':
 
 	if args.command == "identify-exitrons":
 		identify_exitrons(work_dir, args)
+		log_settings(work_dir, args, 'w')
