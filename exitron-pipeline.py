@@ -12,7 +12,7 @@ import os
 
 def log_settings(work_dir, args, write_mode='a'):
 
-	args_order = ['version', 'work_dir', 'command', 'gtf', 'samples', 'junction_format', 'junction_filename', 'min_count', 'min_coverage', 'min_total_coverage']
+	args_order = ['version', 'work_dir', 'command', 'gtf', 'samples', 'junction_format', 'junction_filename', 'min_count', 'min_coverage', 'min_total_coverage', 'bam', 'file-handle', 'genome-fasta', 'bam-filename', 'NPROC']
 
 	with open(work_dir+"Log.out", write_mode) as fout:
 		fout.write(time.asctime( time.localtime(time.time()) )+"\n")
@@ -126,9 +126,54 @@ def identify_exitrons(work_dir, args):
 
 	subprocess.call("rm -f "+work_dir+"junctions_GTF_map.tmp", shell=True)
 
+def prepare_bam_files(work_dir, bam_file, handle, genome_fasta, NPROC=4):
+	""" Extract the unique reads and unique exonic reads from the 
+	supplied bam file, index and output to the working directory. """
+
+	# Extract unique junctions reads (ujr)
+	uniq_reads_bam = "{}ujr.{}.bam".format(work_dir, handle) 
+	cmd = "samtools view -@ %d %s | grep -w \"NH:i:1\" | perl -n -e '@line=split(/\\t/,$_); if ($line[5]=~/N/){ print \"$_\"; }' > %s" % (NPROC, bam_file, uniq_reads_bam.replace('.bam', '.sam'))
+	subprocess.call(cmd, shell=True)
+
+	# Convert sam to bam
+	subprocess.call("samtools view -@ {0} -bT {1} {2} | samtools sort -o {3} -".format(NPROC, genome_fasta, uniq_reads_bam.replace('.bam', '.sam'), uniq_reads_bam), shell=True)
+
+	# Index bam
+	subprocess.call("{} index {}".format(samtools_path, uniq_reads_bam), shell=True)
+
+	# Remove sam
+	subprocess.call("rm -f {}".format(uniq_reads_bam.replace('.bam', '.sam')), shell=True)
+
+	# Extract unique exonic reads (uer)
+	uniq_exon_reads_bam = '{}uer.{}.bam'.format(work_dir, handle)
+	cmd = "samtools view -@ %d %s | grep -w \"NH:i:1\" | perl -n -e '@line=split(/\\t/,$_); if ($line[5]!~/N/){ print \"$_\"; }' > %s" % (NPROC, bam_file, uniq_exon_reads_bam.replace('.bam', '.sam'))
+	subprocess.call(cmd, shell=True)
+
+	# Convert sam to bam
+	subprocess.call("samtools view -@ {0} -bT {1} {2} | samtools sort -o {3} -".format(NPROC, genome_fasta, uniq_exon_reads_bam.replace(".bam", ".sam"), uniq_exon_reads_bam), shell=True)
+
+	# Index bam
+	subprocess.call("{} index {}".format(samtools_path, uniq_exon_reads_bam), shell=True)
+
+	# Remove sam
+	subprocess.call("rm -f {}".format(uniq_exon_reads_bam.replace('.bam', '.sam')), shell=True)
+
+def prepare_multi_bam(work_dir, args):
+	""" Loop through the samples in the file and 
+	prepare the bam files. """
+
+	for line in open(args.samples):
+		group_id, path, sample_id = line.rstrip().split('\t')[:3]
+		prepare_bam_files(work_dir, path+args.bam_filename, sample_id, args.genome_fasta, args.NPROC)
+
 if __name__ == '__main__':
 
-	version = "0.1.4"
+	def stay_positive(val):
+		if int(val) < 1:
+			raise argparse.ArgumentTypeError("--NPROC must be at least 1.")
+		return val
+
+	version = "0.2.0"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
@@ -145,12 +190,33 @@ if __name__ == '__main__':
 	parser_a.add_argument('--min-coverage', type=int, default=1, help="Minimum junction coverage in a single replicate.")
 	parser_a.add_argument('--min-total-coverage', type=int, default=1, help="Minimum junction coverage taken over all replicates of a group.")
 
+	# Prepare bam files for PSI calculation
+	parser_b = subparsers.add_parser('prepare-bam', help="Extract the unique reads required for the PSI calculation.")
+	parser_b.add_argument('-b', '--bam', required=True, help="BAM alignment file.")
+	parser_b.add_argument('-f', '--file-handle', required=True, help="Unique file handle. The output files will be [work_dir]/uniq_reads.[file-handle].bam and [work_dir]/uniq_exonic_reads.[file-handle].bam.")
+	parser_b.add_argument('-g', '--genome-fasta', required=True, help="Genome fasta corresponding to the one used for the BAM file creation.")
+	parser_b.add_argument('--NPROC', type=stay_positive, default=4, help="Number of processes to use when running samtools.")
+
+	parser_c = subparsers.add_parser('prepare-multi-bam', help="Prepare BAM files for all samples in the files.txt file.")
+	parser_c.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
+	parser_c.add_argument('-g', '--genome-fasta', required=True, help="Genome fasta corresponding to the one used for the BAM file creation.")
+	parser_c.add_argument('--bam-filename', default="Aligned.sortedByCoord.out.bam", help="BAM filename (not path). Assumes that all BAM files have the same name, but different paths.")
+	parser_c.add_argument('--NPROC', type=stay_positive, default=4, help="Number of processes to use when running samtools.")	
+
 	args = parser.parse_args()
 
 	# Create work-dir if not exists
 	work_dir = args.work_dir if args.work_dir.endswith('/') else args.work_dir + '/'
 	if not os.path.exists(work_dir): os.makedirs(work_dir)
 
-	log_settings(work_dir, args, 'w')
 	if args.command == "identify-exitrons":
 		identify_exitrons(work_dir, args)
+		log_settings(work_dir, args, 'w')
+
+	elif args.command == "prepare-bam":
+		prepare_bam_files(work_dir, args.bam, args.file_handle, args.genome_fasta, args.NPROC)
+		log_settings(work_dir, args, 'a')
+
+	elif args.command == "prepare-multi-bam":
+		prepare_multi_bam(work_dir, args)
+		log_settings(work_dir, args, 'a')
