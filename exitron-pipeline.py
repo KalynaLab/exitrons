@@ -4,6 +4,7 @@
 exitron-pipeline.py => Exitron identification, quantification and comparison pipeline
 """
 
+from __future__ import division
 from natsort import natsorted
 import numpy as np
 import argparse
@@ -140,7 +141,7 @@ def prepare_bam_files(work_dir, bam_file, file_handle, genome_fasta, NPROC=4):
 	subprocess.call("samtools view -@ {0} -bT {1} {2} | samtools sort -o {3} -".format(NPROC, genome_fasta, uniq_reads_bam.replace('.bam', '.sam'), uniq_reads_bam), shell=True)
 
 	# Index bam
-	subprocess.call("{} index {}".format(samtools_path, uniq_reads_bam), shell=True)
+	subprocess.call("samtools index {}".format(uniq_reads_bam), shell=True)
 
 	# Remove sam
 	subprocess.call("rm -f {}".format(uniq_reads_bam.replace('.bam', '.sam')), shell=True)
@@ -154,7 +155,7 @@ def prepare_bam_files(work_dir, bam_file, file_handle, genome_fasta, NPROC=4):
 	subprocess.call("samtools view -@ {0} -bT {1} {2} | samtools sort -o {3} -".format(NPROC, genome_fasta, uniq_exon_reads_bam.replace(".bam", ".sam"), uniq_exon_reads_bam), shell=True)
 
 	# Index bam
-	subprocess.call("{} index {}".format(samtools_path, uniq_exon_reads_bam), shell=True)
+	subprocess.call("samtools index {}".format(uniq_exon_reads_bam), shell=True)
 
 	# Remove sam
 	subprocess.call("rm -f {}".format(uniq_exon_reads_bam.replace('.bam', '.sam')), shell=True)
@@ -308,6 +309,176 @@ def calculate_multi_PSI(work_dir, args):
 		uer = "{}uer.{}.bam".format(args.bam_dir, sample_id)
 		calculate_PSI(work_dir, args.exitrons_info, ujr, uer, sample_id)
 
+def monte_carlo_permutation_test(x, y, nmc=1000):
+
+	import math
+
+	# Calculate the unique number of combinations
+	# without replacement
+	n = len(x) + len(y)
+	r = len(x)
+	N = math.factorial(n) / math.factorial(r) / math.factorial(n-r)
+
+	# Count the number of times the difference of the mean
+	# of the randomly permutated samples is bigger than the
+	# observed difference of the mean for x and y
+	k, diff = 0.0, abs(np.nanmean(x) - np.nanmean(y))
+	xy = np.concatenate([x, y])
+
+	if N > nmc: # Do nmc random permutations
+		for i in xrange(nmc):
+			xy = np.concatenate([x, y])
+			np.random.shuffle(xy)
+			k += diff < abs(np.nanmean(xy[:r]) - np.nanmean(xy[r:]))
+		return k / nmc
+
+	else: # Check all permutations
+		from itertools import combinations
+
+		xy = np.concatenate([x, y])
+		xy_indx = xrange(n)
+		for comb in combinations(xy_indx, r):
+			new_x = [ xy[i] for i in comb ]
+			new_y = [ xy[i] for i in set(xy_indx).difference(set(comb)) ]
+			k += diff < abs(np.nanmean(new_x) - np.nanmean(new_y))
+		print diff, k, N
+		return k / N
+
+def CI_difference_between_means(x, y, confidence=0.95):
+    """ Calculate the confidence interval for the difference
+    of two means. 
+
+    M1 - M2 +/- (tCL)(SM1-M2)
+    """
+
+    import math
+    import scipy.stats as stats
+
+    # http://onlinestatbook.com/2/estimation/difference_means.html
+    M1, M2 = np.mean(x), np.mean(y)
+    s1, s2 = np.var(x, ddof=1), np.var(y, ddof=1)
+    diff = M2-M1
+
+    # Degrees of freedom and finding t
+    df = (len(x)-1) + (len(y)-1)
+    t = stats.t.ppf((1+confidence)/2, df)
+
+    if len(x) == len(y): # Equal sample sizes
+
+        # Compute the estimate of the standard error
+        # of the difference between means
+        MSE = (s1+s2) / 2
+        SM1M2 = math.sqrt( (2*MSE) / len(x) )
+
+    else: # Unequal sample sizes
+
+        # Compute the sum of squares error (SSE)
+        SSE = sum([ (X-M1)**2 for X in x ]) + sum([ (X-M2)**2 for X in y ])
+        MSE = SSE/df
+
+        harmonic_mean = 2 / (1/len(x) + 1/len(y))
+        SM1M2 = math.sqrt( (2*MSE) / harmonic_mean )
+
+    return diff, diff - t*SM1M2, diff + t*SM1M2
+
+def parse_PSI(f, readScore = ['VLOW', 'LOW', 'OK', 'SOK'], readBalance = ['OKAY']):
+	""" Parse the PSI values. If an exitron's read score and 
+	read balance are not in the readScore or readBalance arrays, 
+	the PSI value will be parsed as nan. """
+
+	psi = {}
+	for line in open(f):
+		if not line.startswith('exitron_id'):
+			cols = line.rstrip().split('\t')
+			psi[cols[0]] = {
+				'transcript_id': cols[1],
+				'gene_id': cols[2],
+				'gene_name': cols[3],
+				'EI_length': cols[4],
+				'EIx3': cols[5],
+				'PSI': float(cols[10]) if cols[10] != "NA" else float('nan'),
+				'QS': all([ cols[11] in readScore, cols[12] in readBalance ])
+			}
+	return psi
+
+def compare(work_dir, args):
+	""" Compare the exitrons of two groups """
+
+	import numpy as np
+
+	"""
+		Methods: 
+			1) Delta: Simply calculate the difference between the two groups
+			2) Mann-Whitney U test
+			2) Permutation test
+			3a) Wilcoxon signed rank test
+			3b) Paired wilcoxon signed rank test
+			...
+	"""
+	
+	# Get the PSI values for each sample
+	psi_per_sample, info = {}, {}
+	for line in open(args.samples):
+		group_id, path, sample_id = line.rstrip().split('\t')[:3]
+		try: psi_per_sample[group_id][sample_id] = parse_PSI(args.psi_dir+sample_id+".psi")
+		except KeyError: 
+			psi_per_sample[group_id] = { sample_id: parse_PSI(args.psi_dir+sample_id+".psi") }
+			info = parse_PSI(args.psi_dir+sample_id+".psi")
+
+	# Get the PSI values per exitron, split up
+	# for the different groups
+	psi_vals, QS = {}, {}
+	groups = [args.reference, args.test]
+	some_sample = [ x for x in psi_per_sample[groups[0]] ][0]
+	for EI in psi_per_sample[args.reference][some_sample]:
+		psi_vals[EI] = { g: [ psi_per_sample[g][r][EI]["PSI"] for r in psi_per_sample[g] ] for g in groups }
+		QS[EI] = "A{};B{}".format(*[ sum([ psi_per_sample[g][r][EI]["QS"] for r in psi_per_sample[g] ]) for g in groups ])
+
+	# TBD: Significance test selection
+	# FDR
+
+	# For now I'm just going to output the sample means,
+	# the difference of the means + the 95% CI for the
+	# difference between the means
+	with open("{}{}_{}.diff".format(work_dir, args.reference, args.test), 'w') as fout:
+		#fout.write("#exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length_in_nt\tEIx3\t{}_mean\t{}_mean\tdiff\t95%_CI\n".format(args.reference, args.test))
+		fout.write("#exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length_in_nt\tEIx3\t{}_mean\t{}_mean\tdiff\n".format(args.reference, args.test))
+		for ei in natsorted(psi_vals):
+			ref_psi = psi_vals[ei][args.reference]
+			test_psi = psi_vals[ei][args.test]
+			
+			fout.write("{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{:.3f}\t{}".format(
+				ei,
+				info[ei]["transcript_id"],
+				info[ei]["gene_id"],
+				info[ei]["gene_name"],
+				info[ei]["EI_length"],
+				info[ei]["EIx3"],
+				np.mean(ref_psi),
+				np.mean(test_psi),
+				np.mean(test_psi)-np.mean(ref_psi),
+				QS[ei])
+			)
+
+			"""
+			diff, lower, upper = CI_difference_between_means(ref_psi, test_psi)
+			fout.write("{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f} {} diff {} {:.3f}\t{}\n".format(ei, 
+				info[ei]["transcript_id"],
+				info[ei]["gene_id"],
+				info[ei]["gene_name"],
+				info[ei]["EI_length"],
+				info[ei]["EIx3"],
+				np.mean(ref_psi),
+				np.mean(test_psi),
+				diff,
+				lower,
+				u"\u2264".encode("UTF-8"),
+				u"\u2264".encode("UTF-8"),
+				upper,
+				QS[ei])
+			)
+			"""
+
 if __name__ == '__main__':
 
 	def stay_positive(val):
@@ -356,6 +527,12 @@ if __name__ == '__main__':
 	parser_e.add_argument('--exitrons-info', required=True, help="exitrons.info file (from identify-exitrons).")
 	parser_e.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
 
+	parser_f = subparsers.add_parser('compare', help="Compare exitrons of two groups.")
+	parser_f.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
+	parser_f.add_argument('--psi-dir', required=True, help="PSI files directory.")
+	parser_f.add_argument('--reference', required=True, help="Group id (as listed in the samples file) of the test group.")
+	parser_f.add_argument('--test', required=True, help="Group id (as listed in the samples file) of the test group.")
+
 	args = parser.parse_args()
 
 	# Create work-dir if not exists
@@ -384,3 +561,6 @@ if __name__ == '__main__':
 	elif args.command == "calculate-multi-PSI":
 		calculate_multi_PSI(work_dir, args)
 		log_settings(work_dir, args, 'a')
+
+	elif args.command == "compare":
+		compare(work_dir, args)
