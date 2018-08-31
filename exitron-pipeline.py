@@ -104,7 +104,7 @@ def identify_exitrons(work_dir, args):
 
 	# Parse intersection
 	seen = set()
-	infoOut, bedOut = open(work_dir+"exitrons.info", 'w'), open(work_dir+"exitrons.bed", 'w')
+	infoOut, bedOut, eceOut = open(work_dir+"exitrons.info", 'w'), open(work_dir+"exitrons.bed", 'w'), open(work_dir+"exitron-containing-exons.bed", 'w')
 	infoOut.write( "#exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length_in_nt\tEIx3\n" )
 
 	for line in open(work_dir+"junctions_GTF_map.tmp"):
@@ -122,9 +122,10 @@ def identify_exitrons(work_dir, args):
 		if not exitron_id in seen:
 			infoOut.write( "{}\t{}\t{}\t{}\t{}\t{}\n".format(exitron_id, attr["transcript_id"], attr["gene_id"], attr["gene_name"], EI_length, EIx3) )
 			bedOut.write( "{}\t{}\t{}\t{};{}\t1000\t{}\n".format(j_chr, j_start, int(j_end)+1, attr["gene_name"], exitron_id, j_strand) )
+			eceOut.write( "{}\t{}\t{}\t{};{}\t1000\t{}\n".format(j_chr, cds_start, cds_end, attr["gene_name"], exitron_id, j_strand) )
 			seen.add(exitron_id)
 
-	infoOut.close(), bedOut.close()
+	infoOut.close(), bedOut.close(), eceOut.close()
 
 	subprocess.call("rm -f "+work_dir+"junctions_GTF_map.tmp", shell=True)
 
@@ -447,7 +448,7 @@ def compare(work_dir, args):
 			ref_psi = psi_vals[ei][args.reference]
 			test_psi = psi_vals[ei][args.test]
 			
-			fout.write("{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{:.3f}\t{}".format(
+			fout.write("{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{:.3f}\t{}\n".format(
 				ei,
 				info[ei]["transcript_id"],
 				info[ei]["gene_id"],
@@ -486,7 +487,7 @@ if __name__ == '__main__':
 			raise argparse.ArgumentTypeError("--NPROC must be at least 1.")
 		return val
 
-	version = "0.2.5"
+	version = "0.2.6"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
