@@ -56,7 +56,7 @@ def yield_junctions(f, file_format="STAR"):
 					'uniq_reads': int(cols[6]),
 					'multimap_reads': int(cols[7]),
 					'max_overhang': int(cols[8]),
-					'depth': int(cols[6]) + int(cols[7])
+					'depth': int(cols[6]) # Take depth as unique reads only
 					})
 
 		except IndexError: pass
@@ -342,8 +342,38 @@ def monte_carlo_permutation_test(x, y, nmc=1000):
 			new_x = [ xy[i] for i in comb ]
 			new_y = [ xy[i] for i in set(xy_indx).difference(set(comb)) ]
 			k += diff < abs(np.nanmean(new_x) - np.nanmean(new_y))
-		print diff, k, N
 		return k / N
+
+def paired_permutation_test(x, y, max_2k=10000):
+
+	"""
+		https://arxiv.org/pdf/1603.00214.pdf -> Haven't read it, but is about permuting incomplete paired data
+		http://axon.cs.byu.edu/Dan/478/assignments/permutation_test.php
+
+		1) Obtain a set of k pairs of estimates {(a1, b1), (a2, b2), ..., (ak, bk)} for (M1, M2)
+		2) Calculate the average difference, diff = sum([ ai-bi for i in k ]) / k
+		3) Let n = 0
+		4) For each possible permutation of swapping ai and bi (swapping labels)
+			a) Calculate the average difference, new_diff = sum([ ai-bi for i in k ]) / k
+			b) if abs(new_diff) >= abs(diff) => n += 1
+		5) Report p = n/2**k
+	"""
+
+	from itertools import product
+
+	# Calculate the differences and average difference
+	k = len(x)
+	diff = [ x[i]-y[i] for i in xrange(k) ]
+	avg_diff = sum(diff) / k
+
+	# Go through the permutations
+	n = 0.0
+	for i, signs in enumerate(product([1, -1], repeat=k)):
+		if i < max_2k:
+			new_diff = sum([ diff[j]*signs[j] for j in xrange(k) ]) / k
+			if abs(new_diff) >= abs(avg_diff): n += 1
+		else: break
+	return n / (2**k)
 
 def CI_difference_between_means(x, y, confidence=0.95):
     """ Calculate the confidence interval for the difference
