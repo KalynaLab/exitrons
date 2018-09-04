@@ -310,7 +310,7 @@ def calculate_multi_PSI(work_dir, args):
 		uer = "{}uer.{}.bam".format(args.bam_dir, sample_id)
 		calculate_PSI(work_dir, args.exitrons_info, ujr, uer, sample_id)
 
-def monte_carlo_permutation_test(x, y, nmc=1000):
+def monte_carlo_permutation_test(x, y, nmc=10000):
 
 	import math
 
@@ -364,14 +364,14 @@ def paired_permutation_test(x, y, max_2k=10000):
 	# Calculate the differences and average difference
 	k = len(x)
 	diff = [ x[i]-y[i] for i in xrange(k) ]
-	avg_diff = sum(diff) / k
+	avg_diff = np.nanmean(diff)
 
 	# Go through the permutations
 	n = 0.0
 	for i, signs in enumerate(product([1, -1], repeat=k)):
 		if i < max_2k:
-			new_diff = sum([ diff[j]*signs[j] for j in xrange(k) ]) / k
-			if abs(new_diff) >= abs(avg_diff): n += 1
+			new_avg_diff = np.nanmean([ diff[j]*signs[j] for j in xrange(k) ])
+			if abs(new_avg_diff) >= abs(avg_diff): n += 1
 		else: break
 	return n / (2**k)
 
@@ -441,7 +441,7 @@ def compare(work_dir, args):
 		Methods: 
 			1) Delta: Simply calculate the difference between the two groups
 			2) Mann-Whitney U test
-			2) Permutation test
+			2) Paired permutation test
 			3a) Wilcoxon signed rank test
 			3b) Paired wilcoxon signed rank test
 			...
@@ -456,59 +456,60 @@ def compare(work_dir, args):
 			psi_per_sample[group_id] = { sample_id: parse_PSI(args.psi_dir+sample_id+".psi") }
 			info = parse_PSI(args.psi_dir+sample_id+".psi")
 
+	if args.paired:
+		pairs = {}
+		for line in open(args.samples):
+			group_id, path, sample_id, pair_id = line.rstrip().split('\t')[:4]
+			try: pairs[pair_id][group_id] = sample_id
+			except KeyError: pairs[pair_id] = { group_id: sample_id }
+
 	# Get the PSI values per exitron, split up
 	# for the different groups
 	psi_vals, QS = {}, {}
 	groups = [args.reference, args.test]
 	some_sample = [ x for x in psi_per_sample[groups[0]] ][0]
-	for EI in psi_per_sample[args.reference][some_sample]:
-		psi_vals[EI] = { g: [ psi_per_sample[g][r][EI]["PSI"] for r in psi_per_sample[g] ] for g in groups }
-		QS[EI] = "A{};B{}".format(*[ sum([ psi_per_sample[g][r][EI]["QS"] for r in psi_per_sample[g] ]) for g in groups ])
+	for ei in psi_per_sample[args.reference][some_sample]:
+
+		if args.paired:
+			psi_vals[ei] = { g: [] for g in groups }
+			for p in pairs:
+				for g in pairs[p]:
+					psi_vals[ei][pairs[p][g]].append(psi_per_samples[g][pairs[p][g]][ei]["PSI"])
+
+		else: 
+			psi_vals[ei] = { g: [ psi_per_sample[g][r][ei]["PSI"] for r in psi_per_sample[g] ] for g in groups }
+		
+		QS[ei] = "A{};B{}".format(*[ sum([ psi_per_sample[g][r][ei]["QS"] for r in psi_per_sample[g] ]) for g in groups ])
 
 	# TBD: Significance test selection
+	results = {}
+	for ei in psi_vals:
+		results[ei] = { 'pvalue': paired_permutation_test(psi_vals[ei][args.reference], psi_vals[ei][args.test]) if args.paired else monte_carlo_permutation_test(psi_vals[ei][args.reference], psi_vals[ei][args.test]) }
+
 	# FDR
 
 	# For now I'm just going to output the sample means,
 	# the difference of the means + the 95% CI for the
 	# difference between the means
 	with open("{}{}_{}.diff".format(work_dir, args.reference, args.test), 'w') as fout:
-		#fout.write("#exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length_in_nt\tEIx3\t{}_mean\t{}_mean\tdiff\t95%_CI\n".format(args.reference, args.test))
-		fout.write("#exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length_in_nt\tEIx3\t{}_mean\t{}_mean\tdiff\n".format(args.reference, args.test))
+		fout.write("#exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length_in_nt\tEIx3\t{}_mean\t{}_mean\tdiff\tpvalue\n".format(args.reference, args.test))
 		for ei in natsorted(psi_vals):
 			ref_psi = psi_vals[ei][args.reference]
 			test_psi = psi_vals[ei][args.test]
 			
-			fout.write("{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{:.3f}\t{}\n".format(
+			fout.write("{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.9f}\t{}\n".format(
 				ei,
 				info[ei]["transcript_id"],
 				info[ei]["gene_id"],
 				info[ei]["gene_name"],
 				info[ei]["EI_length"],
 				info[ei]["EIx3"],
-				np.mean(ref_psi),
-				np.mean(test_psi),
-				np.mean(test_psi)-np.mean(ref_psi),
+				np.nanmean(ref_psi),
+				np.nanmean(test_psi),
+				np.nanmean(test_psi)-np.nanmean(ref_psi),
+				results[ei]['pvalue'], 
 				QS[ei])
 			)
-
-			"""
-			diff, lower, upper = CI_difference_between_means(ref_psi, test_psi)
-			fout.write("{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.3f} {} diff {} {:.3f}\t{}\n".format(ei, 
-				info[ei]["transcript_id"],
-				info[ei]["gene_id"],
-				info[ei]["gene_name"],
-				info[ei]["EI_length"],
-				info[ei]["EIx3"],
-				np.mean(ref_psi),
-				np.mean(test_psi),
-				diff,
-				lower,
-				u"\u2264".encode("UTF-8"),
-				u"\u2264".encode("UTF-8"),
-				upper,
-				QS[ei])
-			)
-			"""
 
 if __name__ == '__main__':
 
@@ -563,6 +564,7 @@ if __name__ == '__main__':
 	parser_f.add_argument('--psi-dir', required=True, help="PSI files directory.")
 	parser_f.add_argument('--reference', required=True, help="Group id (as listed in the samples file) of the test group.")
 	parser_f.add_argument('--test', required=True, help="Group id (as listed in the samples file) of the test group.")
+	parser_f.add_argument('--paired', action='store_true', help="Treat data as paired data. Requires the 4th column in the samples file to be the pair_id.")
 
 	args = parser.parse_args()
 
