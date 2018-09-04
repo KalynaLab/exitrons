@@ -518,7 +518,7 @@ if __name__ == '__main__':
 			raise argparse.ArgumentTypeError("--NPROC must be at least 1.")
 		return val
 
-	version = "0.2.6"
+	version = "0.3.0"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
