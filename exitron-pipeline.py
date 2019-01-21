@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
 
 """
 exitron-pipeline.py => Exitron identification, quantification and comparison pipeline
@@ -7,6 +8,7 @@ exitron-pipeline.py => Exitron identification, quantification and comparison pip
 from __future__ import division
 from natsort import natsorted
 import numpy as np
+import scipy.stats
 import argparse
 import subprocess
 import time
@@ -133,41 +135,22 @@ def prepare_bam_files(work_dir, bam_file, file_handle, genome_fasta, NPROC=4):
 	""" Extract the unique reads and unique exonic reads from the 
 	supplied bam file, index and output to the working directory. """
 
-	# Extract unique junctions reads (ujr)
-	uniq_reads_bam = "{}ujr.{}.bam".format(work_dir, file_handle) 
-	cmd = "samtools view -@ %d %s | grep -w \"NH:i:1\" | perl -n -e '@line=split(/\\t/,$_); if ($line[5]=~/N/){ print \"$_\"; }' > %s" % (NPROC, bam_file, uniq_reads_bam.replace('.bam', '.sam'))
+	# Extract unique reads
+	uniq_bam = "{}uniq.{}.bam".format(work_dir, file_handle)
+	cmd = "samtools view -@ {0} {1} | grep -w \"NH:i:1\" | samtools view -@ {0} -bT {2} - | samtools sort -o {3}.bam -".format(NPROC, bam_file, genome_fasta, uniq_bam)
 	subprocess.call(cmd, shell=True)
 
-	# Convert sam to bam
-	subprocess.call("samtools view -@ {0} -bT {1} {2} | samtools sort -o {3} -".format(NPROC, genome_fasta, uniq_reads_bam.replace('.bam', '.sam'), uniq_reads_bam), shell=True)
-
 	# Index bam
-	subprocess.call("samtools index {}".format(uniq_reads_bam), shell=True)
-
-	# Remove sam
-	subprocess.call("rm -f {}".format(uniq_reads_bam.replace('.bam', '.sam')), shell=True)
-
-	# Extract unique exonic reads (uer)
-	uniq_exon_reads_bam = '{}uer.{}.bam'.format(work_dir, file_handle)
-	cmd = "samtools view -@ %d %s | grep -w \"NH:i:1\" | perl -n -e '@line=split(/\\t/,$_); if ($line[5]!~/N/){ print \"$_\"; }' > %s" % (NPROC, bam_file, uniq_exon_reads_bam.replace('.bam', '.sam'))
-	subprocess.call(cmd, shell=True)
-
-	# Convert sam to bam
-	subprocess.call("samtools view -@ {0} -bT {1} {2} | samtools sort -o {3} -".format(NPROC, genome_fasta, uniq_exon_reads_bam.replace(".bam", ".sam"), uniq_exon_reads_bam), shell=True)
-
-	# Index bam
-	subprocess.call("samtools index {}".format(uniq_exon_reads_bam), shell=True)
-
-	# Remove sam
-	subprocess.call("rm -f {}".format(uniq_exon_reads_bam.replace('.bam', '.sam')), shell=True)
+	subprocess.call("samtools index {}".format(uniq_bam), shell=True)
 
 def prepare_multi_bam(work_dir, args):
 	""" Loop through the samples in the file and 
 	prepare the bam files. """
 
 	for line in open(args.samples):
-		group_id, path, sample_id = line.rstrip().split('\t')[:3]
-		prepare_bam_files(work_dir, path+args.bam_filename, sample_id, args.genome_fasta, args.NPROC)
+		if not line.startswith('#'):
+			group_id, path, sample_id = line.rstrip().split('\t')[:3]
+			prepare_bam_files(work_dir, path+args.bam_filename, sample_id, args.genome_fasta, args.NPROC)
 
 def quality_score(A, B, C, D):
 	""" Score the exitron based on the number of reads """
@@ -211,7 +194,97 @@ def quality_score(A, B, C, D):
 
 	return RS, balance
 
-def calculate_PSI(work_dir, exitron_info, ujr_bam, uer_bam, file_handle):
+def mean_CI(x, confidence=0.95):
+	n = len(x)
+	m, sem = np.mean(x), scipy.stats.sem(x)
+	h = sem * scipy.stats.t.ppf((1 + confidence) / 2., n-1)
+	return m, m-h, m+h
+
+def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle):
+
+	import re
+
+	"""
+		http://bioinformatics.cvr.ac.uk/blog/tag/cigar-string/
+		CIGAR
+		D => Deletion; the nucleotide is present in the reference but not in the read
+		I => Insertion; the nucleotide is present in the read, but not in the reference
+		M => Match; can be either an alignment match or mismatch. The nucleotide is present in the reference
+		N => Skipped region; a region of nucleotides is not present in the read
+		P => Padding; padded area in the read and not in the reference
+		S => Soft clipping; the clipped nucleotides are present in the read
+
+		Case1 (M/X/=):
+			start at the specified mapping position, set counter to 1
+			Add 1 to both the counts of the bases from that position and the counter.
+			Move to the next position.
+			Repeat this process till counter is the same as the number associated with the operator.
+		Case2 (N/D):
+			Move the specified mapping position by the number associated with the operator.
+		Case3 (I/S/H/P):
+			Do nothing
+	"""
+
+	# Extract the reads overlapping with the exitron +/- 10nt region
+	rc, info = {}, {}
+	for line in open(exitron_info):
+		if not line.startswith('#'):
+			exitron_id, t_id, gene_id, gene_name, EI_len, EIx3 = line.rstrip().split('\t')
+			info[exitron_id] = { 't_id': t_id, 'gene_id': gene_id, 'gene_name': gene_name, 'EI_length': EI_len, 'EIx3': EIx3 }
+
+			c, coord, strand = exitron_id.split(':')
+			s, e = map(int, coord.split('-'))
+			adjusted_e = e-1
+			m = s + ((adjusted_e-s)/2)
+
+			# The 20 nt ranges that should be fully covered by a read in
+			# order to be counted.
+			ARange = set(xrange(s-10, s+10))
+			BRange = set(xrange(int(m)-10, int(m)+10))
+			CRange = set(xrange(e-10, e+10))
+
+			# Get the required read/junction gap signature
+			N = "{}N".format(e-s) 
+
+			# Extract the reads from the bam file
+			subprocess.call("samtools view {} {}:{}-{} > {}tmp.sam".format(uniq_bam, c, s-10, adjusted_e+10, work_dir), shell=True)
+
+			A, B, C, D = 0, 0, 0, 0
+			EIFreq = { str(x): 0 for x in xrange(s, e) } # EI per position coverage
+			for aln in open(work_dir+"tmp.sam"):
+				pos = int(aln.split('\t')[3])
+				cigar = aln.split('\t')[5]
+
+				# Go through the read alignment
+				current_pos = pos
+				for m in re.finditer('(\d+)(\w)', cigar):
+					alnLen, alnOperator = m.groups()
+					if alnOperator in ['M', 'X', '=']:
+
+						alnRange = set(xrange(current_pos, (current_pos + int(alnLen))))
+						current_pos += int(alnLen)
+
+						# Check if a read fully covers the A, B, and/or C regions
+						if ARange <= alnRange: A += 1
+						if BRange <= alnRange: B += 1
+						if CRange <= alnRange: C += 1
+
+						# Track the exitron per base coverage
+						for x in alnRange:
+							if str(x) in EIFreq:
+								EIFreq[str(x)] += 1
+
+					elif alnOperator in ['N', 'D']:
+						if current_pos == s and str(alnLen)+alnOperator == N:
+							D += 1
+						current_pos += int(alnLen)
+
+					else:
+						pass
+
+			# Store exitron coverage
+			rc[exitron_id] = { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EIFreq[x] for x in EIFreq] }
+
 	''' Calculate exitron PSI values, based on the coverage of the 
 	unique exonic reads. 
 						
@@ -231,71 +304,19 @@ def calculate_PSI(work_dir, exitron_info, ujr_bam, uer_bam, file_handle):
     
 	PSI = ( mean(A, B, C) / mean(A, B, C) + D) * 100 '''
 
-	import re
-
-	# Get junction support
-	rc, info = {}, {}
-	track_seen, ABCOut = set(), open(work_dir+"tmp_coverageBed_input.bed", 'w')
-	for line in open(exitron_info):
-		if not line.startswith('#'):
-			exitron_id, t_id, gene_id, gene_name, EI_len, EIx3 = line.rstrip().split('\t')
-			c, coord, strand = exitron_id.split(':')
-			s, e = map(int, coord.split('-'))
-			info[exitron_id] = { 't_id': t_id, 'gene_id': gene_id, 'gene_name': gene_name, 'EI_length': EI_len, 'EIx3': EIx3 }
-
-			if exitron_id not in track_seen: 
-
-				adjusted_e = e-1
-
-				### Unique junction support ###
-				subprocess.call("samtools view {} {}:{}-{} > {}tmp.sam".format(ujr_bam, c, s, adjusted_e, work_dir), shell=True)
-				N = "{}N".format(e-s) # Get the required read/junction gap signature
-
-				uniq_junction_count = 0
-				for aln in open(work_dir+"tmp.sam"):
-					qname = aln.split('\t')[0]
-					pos = int(aln.split('\t')[3])
-					cigar = aln.split('\t')[5]
-					try: start = (pos + int(re.search('^([0-9]+)M', cigar).group(1)))
-					except AttributeError: start = None
-
-					# Check if the junction is at the correct position 
-					# and if the junction size is correct
-					if N in cigar and start == int(s): uniq_junction_count += 1
-
-				rc[exitron_id] = { 'A': 0, 'B': 0, 'C': 0, 'D': uniq_junction_count }
-
-				### Bed file generation for A, B, C read support ###
-				middle_point = int(s + ((adjusted_e-s)/2))
-				ABCOut.write( "{}\t{}\t{}\t{}_A\n".format(c, s-10, s+10, exitron_id) )
-				ABCOut.write( "{}\t{}\t{}\t{}_B\n".format(c, middle_point-10, middle_point+10, exitron_id) )
-				ABCOut.write( "{}\t{}\t{}\t{}_C\n".format(c, e-10, e+10, exitron_id) )
-
-				# Track seen
-				track_seen.add(exitron_id)
-
-	ABCOut.close()
-
-	### Get the unique A, B, C read support ###
-	subprocess.call("samtools view -H {} | grep -P \"@SQ\tSN:\" | sed 's/@SQ\tSN://' | sed 's/\tSN://' | sed 's/\tLN:/\t/' > {}tmp_genome.txt".format(uer_bam, work_dir), shell=True)
-	subprocess.call("sort -k1,1V -k2,2n {0}tmp_coverageBed_input.bed > {0}tmp_coverageBed_input.sorted.bed".format(work_dir), shell=True)
-	subprocess.call("bedtools coverage -sorted -counts -g {0}tmp_genome.txt -a {0}tmp_coverageBed_input.sorted.bed -b {1} > {0}tmp_coverageBed_output.bed".format(work_dir, uer_bam), shell=True)
-	for line in open(work_dir+"tmp_coverageBed_output.bed"):
-		c, start, end, locus, coverage = line.rstrip().split('\t')
-		exitron_id, letter = locus.split('_')
-		rc[exitron_id][letter] = int(coverage)
-
-	### Calculate PSI ###
+	# Calculate PSI and some coverage stats/metrics
 	with open("{}{}.psi".format(work_dir, file_handle), 'w') as fout:
-		fout.write( "exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length\tEIx3\tA\tB\tC\tD\tPSI\tCOVERAGE_SCORE\tREAD_BALANCE\n" )
+		fout.write( "exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length\tEIx3\tA\tB\tC\tD\tPSI\tCOVERAGE_SCORE\tREAD_BALANCE\tCI-95\n" )
 		for EI in natsorted(rc):
 			A, B, C, D = [ rc[EI][x] for x in ['A', 'B', 'C', 'D'] ]
 			try: PSI = (np.mean([A, B, C]) / (np.mean([A, B, C]) + D)) * 100
 			except ZeroDivisionError: PSI = 'nan'
 
-			# Get the read score and read balance labels
+			# Get the coverage metrics
 			rs, rb = quality_score(A, B, C, D)
-			fout.write( "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(EI, info[EI]["t_id"], info[EI]["gene_id"], info[EI]["gene_name"], info[EI]["EI_length"], info[EI]["EIx3"], A, B, C, D, PSI, rs, rb) )
+			m, ci_low, ci_high = mean_CI(rc[EI]['cov'])
+			CI = "{}≤{}≤{}".format(int(ci_low), int(m), int(ci_high))
+			fout.write( "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(EI, info[EI]["t_id"], info[EI]["gene_id"], info[EI]["gene_name"], info[EI]["EI_length"], info[EI]["EIx3"], A, B, C, D, PSI, rs, rb, CI) )
 
 	# Clean-up
 	subprocess.call("rm -f {}tmp*".format(work_dir), shell=True)
@@ -306,9 +327,8 @@ def calculate_multi_PSI(work_dir, args):
 
 	for line in open(args.samples):
 		group_id, path, sample_id = line.rstrip().split('\t')[:3]
-		ujr = "{}ujr.{}.bam".format(args.bam_dir, sample_id)
-		uer = "{}uer.{}.bam".format(args.bam_dir, sample_id)
-		calculate_PSI(work_dir, args.exitrons_info, ujr, uer, sample_id)
+		uniq = "{}uniq.{}.bam".format(args.bam_dir, sample_id)
+		calculate_PSI(work_dir, args.exitrons_info, uniq, sample_id)
 
 def monte_carlo_permutation_test(x, y, nmc=10000):
 
@@ -344,7 +364,7 @@ def monte_carlo_permutation_test(x, y, nmc=10000):
 			k += diff < abs(np.nanmean(new_x) - np.nanmean(new_y))
 		return k / N
 
-def paired_permutation_test(x, y, max_2k=10000):
+def paired_permutation_test(x, y, max_2k=100000):
 
 	"""
 		https://arxiv.org/pdf/1603.00214.pdf -> Haven't read it, but is about permuting incomplete paired data
@@ -367,13 +387,13 @@ def paired_permutation_test(x, y, max_2k=10000):
 	avg_diff = np.nanmean(diff)
 
 	# Go through the permutations
-	n = 0.0
+	n = 0
 	for i, signs in enumerate(product([1, -1], repeat=k)):
 		if i < max_2k:
 			new_avg_diff = np.nanmean([ diff[j]*signs[j] for j in xrange(k) ])
 			if abs(new_avg_diff) >= abs(avg_diff): n += 1
 		else: break
-	return n / (2**k)
+	return n / (2**k) if (2**k) < max_2k else n / max_2k
 
 def CI_difference_between_means(x, y, confidence=0.95):
     """ Calculate the confidence interval for the difference
@@ -428,7 +448,8 @@ def parse_PSI(f, readScore = ['VLOW', 'LOW', 'OK', 'SOK'], readBalance = ['OKAY'
 				'EI_length': cols[4],
 				'EIx3': cols[5],
 				'PSI': float(cols[10]) if cols[10] != "NA" else float('nan'),
-				'QS': all([ cols[11] in readScore, cols[12] in readBalance ])
+				'QS': all([ cols[11] in readScore, cols[12] in readBalance ]),
+				'CI': cols[13]
 			}
 	return psi
 
@@ -474,7 +495,7 @@ def compare(work_dir, args):
 			psi_vals[ei] = { g: [] for g in groups }
 			for p in pairs:
 				for g in pairs[p]:
-					psi_vals[ei][pairs[p][g]].append(psi_per_samples[g][pairs[p][g]][ei]["PSI"])
+					psi_vals[ei][g].append(psi_per_sample[g][pairs[p][g]][ei]["PSI"])
 
 		else: 
 			psi_vals[ei] = { g: [ psi_per_sample[g][r][ei]["PSI"] for r in psi_per_sample[g] ] for g in groups }
@@ -516,7 +537,7 @@ if __name__ == '__main__':
 	def stay_positive(val):
 		if int(val) < 1:
 			raise argparse.ArgumentTypeError("--NPROC must be at least 1.")
-		return val
+		return int(val)
 
 	version = "0.3.0"
 	parser = argparse.ArgumentParser(description=__doc__)
@@ -538,7 +559,7 @@ if __name__ == '__main__':
 	# Prepare bam files for PSI calculation
 	parser_b = subparsers.add_parser('prepare-bam', help="Extract the unique reads required for the PSI calculation.")
 	parser_b.add_argument('-b', '--bam', required=True, help="BAM alignment file.")
-	parser_b.add_argument('-f', '--file-handle', required=True, help="Unique file handle. The output files will be [work_dir]/uniq_reads.[file-handle].bam and [work_dir]/uniq_exonic_reads.[file-handle].bam.")
+	parser_b.add_argument('-f', '--file-handle', required=True, help="Unique file handle. The output files will be [work_dir]/ujr.[file-handle].bam and [work_dir]/uer.[file-handle].bam.")
 	parser_b.add_argument('-g', '--genome-fasta', required=True, help="Genome fasta corresponding to the one used for the BAM file creation.")
 	parser_b.add_argument('--NPROC', type=stay_positive, default=4, help="Number of processes to use when running samtools.")
 
@@ -550,8 +571,7 @@ if __name__ == '__main__':
 
 	parser_d = subparsers.add_parser('calculate-PSI', help="Calculate the exitron PSI.")
 	parser_d.add_argument('--exitrons-info', required=True, help="exitrons.info file (from identify-exitrons).")
-	parser_d.add_argument('--ujr', required=True, help="Unique junction reads BAM file (from prepare-bam).")
-	parser_d.add_argument('--uer', required=True, help="Unique exonic reads BAM file (from prepare-bam).")
+	parser_d.add_argument('--uniq', required=True, help="Unique reads BAM file (from prepare-bam).")
 	parser_d.add_argument('-f', '--file-handle', required=True, help="Unique file handle. The output file will be [work_dir]/[file-handle].psi.")
 
 	parser_e = subparsers.add_parser('calculate-multi-PSI', help="Calculate PSI for all samples in the samples.txt file.")
@@ -585,8 +605,8 @@ if __name__ == '__main__':
 		log_settings(work_dir, args, 'a')
 
 	elif args.command == "calculate-PSI":
-		if all([ os.path.exists(args.exitrons_info), os.path.exists(args.ujr), os.path.exists(args.uer) ]):
-			calculate_PSI(work_dir, args.exitrons_info, args.ujr, args.uer)
+		if all([ os.path.exists(args.exitrons_info), os.path.exists(args.uniq) ]):
+			calculate_PSI(work_dir, args.exitrons_info, args.uniq, args.file_handle)
 			log_settings(work_dir, args, 'a')
 		else:
 			sys.stderr.write("One (or multiple) input files could not be found.")
