@@ -306,7 +306,7 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle):
 
 	# Calculate PSI and some coverage stats/metrics
 	with open("{}{}.psi".format(work_dir, file_handle), 'w') as fout:
-		fout.write( "exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length\tEIx3\tA\tB\tC\tD\tPSI\tCOVERAGE_SCORE\tREAD_BALANCE\tCI-95\n" )
+		fout.write( "exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length\tEIx3\tA\tB\tC\tD\tPSI\tCOVERAGE_SCORE\tREAD_BALANCE\tCI-95\tREAD_COVERAGE\n" )
 		for EI in natsorted(rc):
 			A, B, C, D = [ rc[EI][x] for x in ['A', 'B', 'C', 'D'] ]
 			try: PSI = (np.mean([A, B, C]) / (np.mean([A, B, C]) + D)) * 100
@@ -316,7 +316,7 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle):
 			rs, rb = quality_score(A, B, C, D)
 			m, ci_low, ci_high = mean_CI(rc[EI]['cov'])
 			CI = "{}≤{}≤{}".format(int(ci_low), int(m), int(ci_high))
-			fout.write( "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(EI, info[EI]["t_id"], info[EI]["gene_id"], info[EI]["gene_name"], info[EI]["EI_length"], info[EI]["EIx3"], A, B, C, D, PSI, rs, rb, CI) )
+			fout.write( "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(EI, info[EI]["t_id"], info[EI]["gene_id"], info[EI]["gene_name"], info[EI]["EI_length"], info[EI]["EIx3"], A, B, C, D, PSI, rs, rb, CI, 'FULL' if min(rc[EI]['cov']) > 0 else 'PARTIAL') )
 
 	# Clean-up
 	subprocess.call("rm -f {}tmp*".format(work_dir), shell=True)
@@ -448,8 +448,7 @@ def parse_PSI(f, readScore = ['VLOW', 'LOW', 'OK', 'SOK'], readBalance = ['OKAY'
 				'EI_length': cols[4],
 				'EIx3': cols[5],
 				'PSI': float(cols[10]) if cols[10] != "NA" else float('nan'),
-				'QS': all([ cols[11] in readScore, cols[12] in readBalance ]),
-				'CI': cols[13]
+				'QS': all([ cols[11] in readScore, cols[12] in readBalance ])
 			}
 	return psi
 
@@ -539,7 +538,7 @@ if __name__ == '__main__':
 			raise argparse.ArgumentTypeError("--NPROC must be at least 1.")
 		return int(val)
 
-	version = "0.3.0"
+	version = "0.3.5"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
