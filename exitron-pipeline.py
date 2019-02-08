@@ -86,10 +86,11 @@ def identify_exitrons(work_dir, args):
 	# Parse the samples per group
 	groups = {}
 	for line in open(args.samples):
-		group_id, path = line.rstrip().split('\t')[:2]
-		junction_file = path+args.junction_filename
-		try: groups[group_id].append( { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) } )
-		except KeyError: groups[group_id] = [ { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) } ]
+		if not line.startswith('#'):
+			group_id, path = line.rstrip().split('\t')[:2]
+			junction_file = path+args.junction_filename
+			try: groups[group_id].append( { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) } )
+			except KeyError: groups[group_id] = [ { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) } ]
 
 	# Get all junctions with at least min_count occurences per group
 	all_junctions = set.union(*[ get_shared_junctions(groups[x], args.min_count, args.min_coverage, args.min_total_coverage) for x in groups ])
@@ -137,7 +138,7 @@ def prepare_bam_files(work_dir, bam_file, file_handle, genome_fasta, NPROC=4):
 
 	# Extract unique reads
 	uniq_bam = "{}uniq.{}.bam".format(work_dir, file_handle)
-	cmd = "samtools view -@ {0} {1} | grep -w \"NH:i:1\" | samtools view -@ {0} -bT {2} - | samtools sort -o {3}.bam -".format(NPROC, bam_file, genome_fasta, uniq_bam)
+	cmd = "samtools view -@ {0} {1} | grep -w \"NH:i:1\" | samtools view -@ {0} -bT {2} - | samtools sort -o {3} -".format(NPROC, bam_file, genome_fasta, uniq_bam)
 	subprocess.call(cmd, shell=True)
 
 	# Index bam
@@ -306,7 +307,7 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle):
 
 	# Calculate PSI and some coverage stats/metrics
 	with open("{}{}.psi".format(work_dir, file_handle), 'w') as fout:
-		fout.write( "exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length\tEIx3\tA\tB\tC\tD\tPSI\tCOVERAGE_SCORE\tREAD_BALANCE\tCI-95\tREAD_COVERAGE\n" )
+		fout.write( "exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length\tEIx3\tA\tB\tC\tD\tPSI\tCOVERAGE_SCORE\tREAD_BALANCE\t5th/median/95th\tLOW_COV\n" )
 		for EI in natsorted(rc):
 			A, B, C, D = [ rc[EI][x] for x in ['A', 'B', 'C', 'D'] ]
 			try: PSI = (np.mean([A, B, C]) / (np.mean([A, B, C]) + D)) * 100
@@ -314,9 +315,10 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle):
 
 			# Get the coverage metrics
 			rs, rb = quality_score(A, B, C, D)
-			m, ci_low, ci_high = mean_CI(rc[EI]['cov'])
-			CI = "{}≤{}≤{}".format(int(ci_low), int(m), int(ci_high))
-			fout.write( "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(EI, info[EI]["t_id"], info[EI]["gene_id"], info[EI]["gene_name"], info[EI]["EI_length"], info[EI]["EIx3"], A, B, C, D, PSI, rs, rb, CI, 'FULL' if min(rc[EI]['cov']) > 0 else 'PARTIAL') )
+			#m, ci_low, ci_high = mean_CI(rc[EI]['cov'])
+			#CI = "{}≤{}≤{}".format(int(ci_low), int(m), int(ci_high))
+			ninetyfive = "{}/{}/{}".format(int(np.percentile(rc[EI]['cov'], 5)), int(np.median(rc[EI]['cov'])), int(np.percentile(rc[EI]['cov'], 95)))
+			fout.write( "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n".format(EI, info[EI]["t_id"], info[EI]["gene_id"], info[EI]["gene_name"], info[EI]["EI_length"], info[EI]["EIx3"], A, B, C, D, PSI, rs, rb, ninetyfive, min(rc[EI]['cov'])) )
 
 	# Clean-up
 	subprocess.call("rm -f {}tmp*".format(work_dir), shell=True)
@@ -326,9 +328,10 @@ def calculate_multi_PSI(work_dir, args):
 	calculate the PSI for all exitrons for each sample. """
 
 	for line in open(args.samples):
-		group_id, path, sample_id = line.rstrip().split('\t')[:3]
-		uniq = "{}uniq.{}.bam".format(args.bam_dir, sample_id)
-		calculate_PSI(work_dir, args.exitrons_info, uniq, sample_id)
+		if not line.startswith('#'):
+			group_id, path, sample_id = line.rstrip().split('\t')[:3]
+			uniq = "{}uniq.{}.bam".format(args.bam_dir, sample_id)
+			calculate_PSI(work_dir, args.exitrons_info, uniq, sample_id)
 
 def monte_carlo_permutation_test(x, y, nmc=10000):
 
@@ -432,6 +435,30 @@ def CI_difference_between_means(x, y, confidence=0.95):
 
     return diff, diff - t*SM1M2, diff + t*SM1M2
 
+def parse_samples(samples_file, control_name, test_name, paired=True):
+	
+	tmp, pairs, control, test = { control_name: {}, test_name: {} }, {}, [], []
+	fields = ["group_id", "path", "sample_id", "pair_id", "gender", "tumor_stage", "etnicity"]
+	for line in open(samples_file):
+		cols = line.rstrip().split('\t')
+		d = { fields[i]: cols[i] if i in xrange(len(cols)) else None for i in xrange(len(fields)) }
+		tmp[d["group_id"]][d["sample_id"]] = d
+
+		if paired:
+			try: pairs[d["pair_id"]][d["group_id"]] = tmp[d["group_id"]][d["sample_id"]]
+			except KeyError: pairs[d["pair_id"]] = { d["group_id"]: tmp[d["group_id"]][d["sample_id"]] }
+
+	if paired:
+		for p in pairs:
+			control.append(pairs[p][control_name])
+			test.append(pairs[p][test_name])
+
+	else:
+		control = [ tmp[control_name][x] for x in tmp[control_name] ]
+		test = [ tmp[test_name][x] for x in tmp[test_name] ]
+
+	return control, test
+
 def parse_PSI(f, readScore = ['VLOW', 'LOW', 'OK', 'SOK'], readBalance = ['OKAY']):
 	""" Parse the PSI values. If an exitron's read score and 
 	read balance are not in the readScore or readBalance arrays, 
@@ -452,36 +479,49 @@ def parse_PSI(f, readScore = ['VLOW', 'LOW', 'OK', 'SOK'], readBalance = ['OKAY'
 			}
 	return psi
 
-def compare(work_dir, args):
-	""" Compare the exitrons of two groups """
+def parse_gene_TPM(f):
+	""" Parse the gene TPM values as floats """
+
+	tpm = {}
+	for line in open(f):
+		try: 
+			gene_name, gene_length, eff_length, TPM, numReads = line.rstrip().split('\t')
+			tpm[gene_name] = float(TPM)
+		except ValueError: pass
+	return tpm
+
+"""def compare(work_dir, args):
+	# Compare the exitrons of two groups
 
 	import numpy as np
 
-	"""
-		Methods: 
-			1) Delta: Simply calculate the difference between the two groups
-			2) Mann-Whitney U test
-			2) Paired permutation test
-			3a) Wilcoxon signed rank test
-			3b) Paired wilcoxon signed rank test
-			...
-	"""
+	#Methods: 
+	#	1) Delta: Simply calculate the difference between the two groups
+	#	2) Mann-Whitney U test
+	#	2) Paired permutation test
+	#	3a) Wilcoxon signed rank test
+	#	3b) Paired wilcoxon signed rank test
+	#	...
 	
 	# Get the PSI values for each sample
 	psi_per_sample, info = {}, {}
 	for line in open(args.samples):
-		group_id, path, sample_id = line.rstrip().split('\t')[:3]
-		try: psi_per_sample[group_id][sample_id] = parse_PSI(args.psi_dir+sample_id+".psi")
-		except KeyError: 
-			psi_per_sample[group_id] = { sample_id: parse_PSI(args.psi_dir+sample_id+".psi") }
-			info = parse_PSI(args.psi_dir+sample_id+".psi")
+		if not line.startswith('#'):
+			group_id, path, sample_id = line.rstrip().split('\t')[:3]
+			try: psi_per_sample[group_id][sample_id] = parse_PSI(args.psi_dir+sample_id+".psi")
+			except KeyError: 
+				psi_per_sample[group_id] = { sample_id: parse_PSI(args.psi_dir+sample_id+".psi") }
+				info = parse_PSI(args.psi_dir+sample_id+".psi")
 
 	if args.paired:
 		pairs = {}
 		for line in open(args.samples):
-			group_id, path, sample_id, pair_id = line.rstrip().split('\t')[:4]
-			try: pairs[pair_id][group_id] = sample_id
-			except KeyError: pairs[pair_id] = { group_id: sample_id }
+			if not line.startswith('#'):
+				group_id, path, sample_id, pair_id = line.rstrip().split('\t')[:4]
+				try: pairs[pair_id][group_id] = sample_id
+				except KeyError: pairs[pair_id] = { group_id: sample_id }
+		for p in pairs:
+			print p, pairs[p]
 
 	# Get the PSI values per exitron, split up
 	# for the different groups
@@ -529,7 +569,96 @@ def compare(work_dir, args):
 				np.nanmean(test_psi)-np.nanmean(ref_psi),
 				results[ei]['pvalue'], 
 				QS[ei])
-			)
+			) 
+"""
+
+def compare(work_dir, args):
+
+	# Parse the samples files
+	reference, test = parse_samples(args.samples, args.reference, args.test, args.paired)
+	refNames = np.array([ r["sample_id"] for r in reference ])
+	tstNames = np.array([ t["sample_id"] for t in test ])
+	#print refNames
+	#print tstNames
+
+	# Get the PSI values in the same order
+	refPSI = [ parse_PSI(args.psi_dir+r["sample_id"]+".psi") for r in reference ]
+	tstPSI = [ parse_PSI(args.psi_dir+t["sample_id"]+".psi") for t in test ]
+
+	# Parse the gene TPM
+	if args.expr_filter:
+		refTPM = [ parse_gene_TPM(r["path"]+args.gene_TPM_file) for r in reference ]
+		tstTPM = [ parse_gene_TPM(t["path"]+args.gene_TPM_file) for t in test ]
+
+	# Compare samples
+	results = {}
+	for ei in refPSI[0]:
+
+		rPSI = np.array([ r[ei]["PSI"] for r in refPSI ])
+		tPSI = np.array([ t[ei]["PSI"] for t in tstPSI ])
+
+		# Select PSI values based on the gene TPM cut-off
+		if args.expr_filter:
+
+			eiGene = refPSI[0][ei]["gene_id"]
+			#print ei, eiGene
+			#print rPSI, tPSI
+
+			rTPM = np.array([ r[eiGene] for r in refTPM ])
+			tTPM = np.array([ t[eiGene] for t in tstTPM ])
+
+			# Select only those pairs for which the TPM cut-off
+			# is exceeded for both the reference and test
+			if args.paired:
+				fltr = map( lambda x, y: (x >= args.min_TPM) & (y >= args.min_TPM), rTPM, tTPM )
+				rPSI = rPSI[fltr]
+				tPSI = tPSI[fltr]
+				usedSamples = '{}'.format(','.join([ x.replace(args.reference, '') for x in refNames[fltr] ]))
+				nSamples = sum(fltr)
+			
+			# Filter reference and test individually
+			else:
+				rFltr = [ x >= args.min_TPM for x in rTPM ]
+				tFltr = [ x >= args.min_TPM for x in tTPM ]
+				rPSI = rPSI[rFltr]
+				tPSI = tPSI[tFltr]
+				usedSamples = '{};{}'.format(','.join(refNames[rFltr]), ','.join(tstNames[tFltr]))
+				nSamples = '{};{}'.format(sum(rFltr), sum(tFltr))
+
+			# Significance testing
+			results[ei] = {
+				'nSamples': nSamples,
+				'usedSamples': usedSamples,
+				'p-value': paired_permutation_test(rPSI, tPSI) if args.paired else monte_carlo_permutation_test(rPSI, tPSI),
+				'meanRefPSI': np.mean(rPSI),
+				'meanTstPSI': np.mean(tPSI),
+				'dPSI': np.mean(tPSI) - np.mean(rPSI)
+			}
+			results[ei]['p-value'] = results[ei]['p-value'] if results[ei]['nSamples'] else float('nan')
+
+	fResults = open("{}{}_{}.diff".format(work_dir, args.reference, args.test), 'w')
+	fResults.write("#exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length_in_nt\tEIx3\t{}_mean\t{}_mean\tdiff\tpvalue\n".format(args.reference, args.test))
+
+	fFilter = open("{}{}_{}.fltr".format(work_dir, args.reference, args.test), 'w')
+	fFilter.write('#exitron_id\tN\tsamples\n')
+
+	for ei in natsorted(results):
+		fResults.write("{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.9f}\t{}\n".format(
+			ei,
+			refPSI[0][ei]["transcript_id"],
+			refPSI[0][ei]["gene_id"],
+			refPSI[0][ei]["gene_name"],
+			refPSI[0][ei]["EI_length"],
+			refPSI[0][ei]["EIx3"],
+			results[ei]["meanRefPSI"],
+			results[ei]["meanTstPSI"],
+			results[ei]["dPSI"],
+			results[ei]["p-value"],
+			results[ei]["nSamples"])
+		)
+		fFilter.write("{}\t{}\t{}\n".format(ei, results[ei]["nSamples"], results[ei]["usedSamples"]))
+
+	fFilter.close(), fResults.close()
 
 if __name__ == '__main__':
 
@@ -538,7 +667,7 @@ if __name__ == '__main__':
 			raise argparse.ArgumentTypeError("--NPROC must be at least 1.")
 		return int(val)
 
-	version = "0.3.5"
+	version = "0.4.0"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
@@ -551,7 +680,7 @@ if __name__ == '__main__':
 	parser_a.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
 	parser_a.add_argument('--junction-format', default="STAR", choices=["STAR", "TopHat2"], help="Junction file format.")
 	parser_a.add_argument('--junction-filename', default="SJ.out.tab", help="Junction filename.")
-	parser_a.add_argument('--min-count', type=int, default=3, help="Minimum number of replicates a junctions needs to occur in per group.")
+	parser_a.add_argument('--min-count', type=int, default=3, help="Minimum number of replicates a junction needs to occur in per group.")
 	parser_a.add_argument('--min-coverage', type=int, default=1, help="Minimum junction coverage in a single replicate.")
 	parser_a.add_argument('--min-total-coverage', type=int, default=1, help="Minimum junction coverage taken over all replicates of a group.")
 
@@ -584,6 +713,9 @@ if __name__ == '__main__':
 	parser_f.add_argument('--reference', required=True, help="Group id (as listed in the samples file) of the test group.")
 	parser_f.add_argument('--test', required=True, help="Group id (as listed in the samples file) of the test group.")
 	parser_f.add_argument('--paired', action='store_true', help="Treat data as paired data. Requires the 4th column in the samples file to be the pair_id.")
+	parser_f.add_argument('--min-TPM', type=float, default=1, help="Minimum gene TPM cut-off.")
+	parser_f.add_argument('--expr-filter', action='store_true', help="Filter based on minimum gene TPM. It's assumed that the gene expression file is located in the path directory specified in the samples file.")
+	parser_f.add_argument('--gene-TPM-file', default="quant.genes.sf", help="Name of the Salmon per gene TPM quantification file.")
 
 	args = parser.parse_args()
 
