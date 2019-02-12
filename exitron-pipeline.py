@@ -151,6 +151,7 @@ def prepare_multi_bam(work_dir, args):
 	for line in open(args.samples):
 		if not line.startswith('#'):
 			group_id, path, sample_id = line.rstrip().split('\t')[:3]
+			print sample_id
 			prepare_bam_files(work_dir, path+args.bam_filename, sample_id, args.genome_fasta, args.NPROC)
 
 def quality_score(A, B, C, D):
@@ -440,13 +441,14 @@ def parse_samples(samples_file, control_name, test_name, paired=True):
 	tmp, pairs, control, test = { control_name: {}, test_name: {} }, {}, [], []
 	fields = ["group_id", "path", "sample_id", "pair_id", "gender", "tumor_stage", "etnicity"]
 	for line in open(samples_file):
-		cols = line.rstrip().split('\t')
-		d = { fields[i]: cols[i] if i in xrange(len(cols)) else None for i in xrange(len(fields)) }
-		tmp[d["group_id"]][d["sample_id"]] = d
+		if not line.startswith('#'):
+			cols = line.rstrip().split('\t')
+			d = { fields[i]: cols[i] if i in xrange(len(cols)) else None for i in xrange(len(fields)) }
+			tmp[d["group_id"]][d["sample_id"]] = d
 
-		if paired:
-			try: pairs[d["pair_id"]][d["group_id"]] = tmp[d["group_id"]][d["sample_id"]]
-			except KeyError: pairs[d["pair_id"]] = { d["group_id"]: tmp[d["group_id"]][d["sample_id"]] }
+			if paired:
+				try: pairs[d["pair_id"]][d["group_id"]] = tmp[d["group_id"]][d["sample_id"]]
+				except KeyError: pairs[d["pair_id"]] = { d["group_id"]: tmp[d["group_id"]][d["sample_id"]] }
 
 	if paired:
 		for p in pairs:
@@ -636,10 +638,10 @@ def compare(work_dir, args):
 			}
 			results[ei]['p-value'] = results[ei]['p-value'] if results[ei]['nSamples'] else float('nan')
 
-	fResults = open("{}{}_{}.diff".format(work_dir, args.reference, args.test), 'w')
+	fResults = open("{}{}_{}.{}.diff".format(work_dir, args.reference, args.test, args.file_handle), 'w')
 	fResults.write("#exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length_in_nt\tEIx3\t{}_mean\t{}_mean\tdiff\tpvalue\n".format(args.reference, args.test))
 
-	fFilter = open("{}{}_{}.fltr".format(work_dir, args.reference, args.test), 'w')
+	fFilter = open("{}{}_{}.{}.fltr".format(work_dir, args.reference, args.test, args.file_handle), 'w')
 	fFilter.write('#exitron_id\tN\tsamples\n')
 
 	for ei in natsorted(results):
@@ -700,7 +702,6 @@ if __name__ == '__main__':
 	parser_d = subparsers.add_parser('calculate-PSI', help="Calculate the exitron PSI.")
 	parser_d.add_argument('--exitrons-info', required=True, help="exitrons.info file (from identify-exitrons).")
 	parser_d.add_argument('--uniq', required=True, help="Unique reads BAM file (from prepare-bam).")
-	parser_d.add_argument('-f', '--file-handle', required=True, help="Unique file handle. The output file will be [work_dir]/[file-handle].psi.")
 
 	parser_e = subparsers.add_parser('calculate-multi-PSI', help="Calculate PSI for all samples in the samples.txt file.")
 	parser_e.add_argument('--bam-dir', required=True, help="Path to the prepared bam files (from prepare-bam).")
@@ -710,6 +711,7 @@ if __name__ == '__main__':
 	parser_f = subparsers.add_parser('compare', help="Compare exitrons of two groups.")
 	parser_f.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
 	parser_f.add_argument('--psi-dir', required=True, help="PSI files directory.")
+	parser_f.add_argument('--file-handle', default="all", help="Additional file handle to be appended.")
 	parser_f.add_argument('--reference', required=True, help="Group id (as listed in the samples file) of the test group.")
 	parser_f.add_argument('--test', required=True, help="Group id (as listed in the samples file) of the test group.")
 	parser_f.add_argument('--paired', action='store_true', help="Treat data as paired data. Requires the 4th column in the samples file to be the pair_id.")
