@@ -87,13 +87,18 @@ def identify_exitrons(work_dir, args):
 	groups = {}
 	for line in open(args.samples):
 		if not line.startswith('#'):
-			group_id, path = line.rstrip().split('\t')[:2]
+			group_id, path, sample_id = line.rstrip().split('\t')[:3]
 			junction_file = path+args.junction_filename
-			try: groups[group_id].append( { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) } )
-			except KeyError: groups[group_id] = [ { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) } ]
+
+			try: groups[group_id][sample_id] = { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) }
+			except KeyError: groups[group_id] = { sample_id: { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) } }
+
+			#try: groups[group_id].append( { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) } )
+			#except KeyError: groups[group_id] = [ { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["depth"] for j in yield_junctions(junction_file, args.junction_format) } ]
+	#print groups
 
 	# Get all junctions with at least min_count occurences per group
-	all_junctions = set.union(*[ get_shared_junctions(groups[x], args.min_count, args.min_coverage, args.min_total_coverage) for x in groups ])
+	all_junctions = set.union(*[ get_shared_junctions([ groups[x][y] for y in groups[x] ], args.min_count, args.min_coverage, args.min_total_coverage) for x in groups ])
 
 	# Output all selected junctions in bed format
 	with open(work_dir+"all_junctions.bed", 'w') as fout:
@@ -107,8 +112,9 @@ def identify_exitrons(work_dir, args):
 
 	# Parse intersection
 	seen = set()
-	infoOut, bedOut, eceOut = open(work_dir+"exitrons.info", 'w'), open(work_dir+"exitrons.bed", 'w'), open(work_dir+"exitron-containing-exons.bed", 'w')
-	infoOut.write( "#exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length_in_nt\tEIx3\n" )
+	infoOut, bedOut, eceOut, jcOut = open(work_dir+"exitrons.info", 'w'), open(work_dir+"exitrons.bed", 'w'), open(work_dir+"exitron-containing-exons.bed", 'w'), open(work_dir+"exitrons.origin", 'w')
+	infoOut.write( "#Exitron ID\tTranscript ID\tGene ID\tGene Symbol\tEI_length_in_nt\tEIx3\n" )
+	jcOut.write( "#Exitron ID\tOrigin\t{}\n".format( '\t'.join([ '\t'.join([ r for r in natsorted(groups[g]) ]) for g in natsorted(groups) ]) ) )
 
 	for line in open(work_dir+"junctions_GTF_map.tmp"):
 		j_chr, j_start, j_end, j_strand, cds_start, cds_end, attributes = line.rstrip().split('\t')
@@ -120,12 +126,24 @@ def identify_exitrons(work_dir, args):
 
 		EI_length = abs(int(j_end)-int(j_start)) + 1
 		EIx3 = "yes" if EI_length % 3 == 0 else "no"
+		junction_id = "{}:{}-{}:{}".format(j_chr, j_start, j_end, j_strand)
 		exitron_id = "{}:{}-{}:{}".format(j_chr, j_start, int(j_end)+1, j_strand)
 
+		# Get the SJ counts per sample
 		if not exitron_id in seen:
 			infoOut.write( "{}\t{}\t{}\t{}\t{}\t{}\n".format(exitron_id, attr["transcript_id"], attr["gene_id"], attr["gene_name"], EI_length, EIx3) )
 			bedOut.write( "{}\t{}\t{}\t{};{}\t1000\t{}\n".format(j_chr, j_start, int(j_end)+1, attr["gene_name"], exitron_id, j_strand) )
 			eceOut.write( "{}\t{}\t{}\t{};{}\t1000\t{}\n".format(j_chr, cds_start, cds_end, attr["gene_name"], exitron_id, j_strand) )
+
+			labels, SJ_counts = [], []
+			for g in natsorted(groups):
+				x = [ groups[g][r][junction_id] if junction_id in groups[g][r] else float('nan') for r in natsorted(groups[g]) ]
+				SJ_counts.append( '\t'.join([ str(y) for y in x ]) )
+
+				if sum([ y >= 0 for y in x ]) >= args.min_count:
+					labels.append( g )
+
+			jcOut.write( "{}\t{}\t{}\n".format(exitron_id, ';'.join(labels), '\t'.join(SJ_counts) ) )
 			seen.add(exitron_id)
 
 	infoOut.close(), bedOut.close(), eceOut.close()
@@ -331,6 +349,7 @@ def calculate_multi_PSI(work_dir, args):
 	for line in open(args.samples):
 		if not line.startswith('#'):
 			group_id, path, sample_id = line.rstrip().split('\t')[:3]
+			print sample_id
 			uniq = "{}uniq.{}.bam".format(args.bam_dir, sample_id)
 			calculate_PSI(work_dir, args.exitrons_info, uniq, sample_id)
 
