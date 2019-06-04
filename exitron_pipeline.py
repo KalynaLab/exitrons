@@ -619,6 +619,7 @@ def compare(work_dir, args):
 		tPSI = np.array([ t[ei]["PSI"] for t in tstPSI ])
 
 		# Select PSI values based on the gene TPM cut-off
+		nSamples, usedSamples = "NA", "NA"
 		if args.expr_filter:
 
 			eiGene = refPSI[0][ei]["gene_id"]
@@ -646,22 +647,23 @@ def compare(work_dir, args):
 				usedSamples = '{};{}'.format(','.join(refNames[rFltr]), ','.join(tstNames[tFltr]))
 				nSamples = '{};{}'.format(sum(rFltr), sum(tFltr))
 
-			# Significance testing
-			results[ei] = {
-				'nSamples': nSamples,
-				'usedSamples': usedSamples,
-				'p-value': paired_permutation_test(rPSI, tPSI) if args.paired else monte_carlo_permutation_test(rPSI, tPSI),
-				'meanRefPSI': np.mean(rPSI),
-				'meanTstPSI': np.mean(tPSI),
-				'dPSI': np.mean(tPSI) - np.mean(rPSI)
-			}
-			results[ei]['p-value'] = results[ei]['p-value'] if results[ei]['nSamples'] else float('nan')
+		# Significance testing
+		results[ei] = {
+			'nSamples': nSamples,
+			'usedSamples': usedSamples,
+			'p-value': paired_permutation_test(rPSI, tPSI) if args.paired else monte_carlo_permutation_test(rPSI, tPSI),
+			'meanRefPSI': np.nanmean(rPSI),
+			'meanTstPSI': np.nanmean(tPSI),
+			'dPSI': np.nanmean(tPSI) - np.nanmean(rPSI)
+		}
+		results[ei]['p-value'] = results[ei]['p-value'] if results[ei]['nSamples'] else float('nan')
 
 	fResults = open("{}{}_{}.{}.diff".format(work_dir, args.reference, args.test, args.file_handle), 'w')
 	fResults.write("#exitron_id\ttranscript_id\tgene_id\tgene_name\tEI_length_in_nt\tEIx3\t{}_mean\t{}_mean\tdiff\tpvalue\n".format(args.reference, args.test))
 
-	fFilter = open("{}{}_{}.{}.fltr".format(work_dir, args.reference, args.test, args.file_handle), 'w')
-	fFilter.write('#exitron_id\tN\tsamples\n')
+	if args.expr_filter: 
+		fFilter = open("{}{}_{}.{}.fltr".format(work_dir, args.reference, args.test, args.file_handle), 'w')
+		fFilter.write('#exitron_id\tN\tsamples\n')
 
 	for ei in natsorted(results):
 		fResults.write("{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.9f}\t{}\n".format(
@@ -677,9 +679,11 @@ def compare(work_dir, args):
 			results[ei]["p-value"],
 			results[ei]["nSamples"])
 		)
-		fFilter.write("{}\t{}\t{}\n".format(ei, results[ei]["nSamples"], results[ei]["usedSamples"]))
 
-	fFilter.close(), fResults.close()
+		if args.expr_filter: fFilter.write("{}\t{}\t{}\n".format(ei, results[ei]["nSamples"], results[ei]["usedSamples"]))
+
+	fResults.close()
+	if args.expr_filter: fFilter.close()
 
 if __name__ == '__main__':
 
