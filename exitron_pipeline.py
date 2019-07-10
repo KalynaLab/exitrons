@@ -17,7 +17,7 @@ def log_settings(work_dir, args, write_mode='a'):
 			except AttributeError: pass
 
 def yield_junctions(f):
-	
+
 	for line in open(f):
 		cols = line.rstrip().split('\t')
 		yield({
@@ -44,7 +44,7 @@ def get_shared_junctions(group_junctions, min_count=3, min_coverage=3, min_total
 				try:
 					jN[j]['N'] += 1
 					jN[j]['total_cov'] += sample[j]
-				except KeyError: 
+				except KeyError:
 					jN[j] = { 'N': 1, 'total_cov': sample[j] }
 
 	# Return those junctions with >= min_count occurences
@@ -86,39 +86,45 @@ def identify_exitrons(work_dir, gtf_file, samples_file, junction_filename="SJ.ou
 
 	for line in open(work_dir+"junctions_GTF_map.tmp"):
 		j_chr, j_start, j_end, j_strand, cds_start, cds_end, attributes = line.rstrip().split('\t')
-		attr = {}
-		for a in attributes.split(';'):
-			if len(a):
-				attr_name, attr_value = list(filter(None, a.split(' ')))
-				attr[attr_name.strip()] = attr_value.replace('\"', '')
 
-		EI_len = abs(int(j_end)-int(j_start)) + 1
-		EIx3 = "yes" if EI_len % 3 == 0 else "no"
-		exitron_id = "{}:{}-{}:{}".format(j_chr, j_start, j_end, j_strand)
+		# Ignore junction starting or ending exactly
+		# at the exon start or end
+		if j_start == cds_start or j_end == cds_end:
+			pass
+		else:
+			attr = {}
+			for a in attributes.split(';'):
+				if len(a):
+					attr_name, attr_value = list(filter(None, a.split(' ')))
+					attr[attr_name.strip()] = attr_value.replace('\"', '')
 
-		# Get the SJ counts per sample
-		if not exitron_id in seen:
-			infoOut.write( "{}\t{}\t{}\t{}\t{}\t{}\n".format(exitron_id, attr["transcript_id"], attr["gene_id"], attr["gene_name"], EI_len, EIx3) )
-			bedOut.write( "{}\t{}\t{}\t{}\t1000\t{}\n".format(j_chr, j_start, j_end, exitron_id, j_strand) )
-			eceOut.write( "{}\t{}\t{}\t{}\t1000\t{}\n".format(j_chr, cds_start, cds_end, exitron_id, j_strand) )
+			EI_len = abs(int(j_end)-int(j_start)) + 1
+			EIx3 = "yes" if EI_len % 3 == 0 else "no"
+			exitron_id = "{}:{}-{}:{}".format(j_chr, j_start, j_end, j_strand)
 
-			labels, SJ_counts = [], []
-			for g in natsorted(groups):
-				x = [ groups[g][r][exitron_id] if exitron_id in groups[g][r] else float('nan') for r in natsorted(groups[g]) ]
-				SJ_counts.append( '\t'.join([ str(y) for y in x ]) )
+			# Get the SJ counts per sample
+			if not exitron_id in seen:
+				infoOut.write( "{}\t{}\t{}\t{}\t{}\t{}\n".format(exitron_id, attr["transcript_id"], attr["gene_id"], attr["gene_name"], EI_len, EIx3) )
+				bedOut.write( "{}\t{}\t{}\t{}\t1000\t{}\n".format(j_chr, j_start, j_end, exitron_id, j_strand) )
+				eceOut.write( "{}\t{}\t{}\t{}\t1000\t{}\n".format(j_chr, cds_start, cds_end, exitron_id, j_strand) )
 
-				if sum([ y >= 0 for y in x ]) >= min_count:
-					labels.append( g )
+				labels, SJ_counts = [], []
+				for g in natsorted(groups):
+					x = [ groups[g][r][exitron_id] if exitron_id in groups[g][r] else float('nan') for r in natsorted(groups[g]) ]
+					SJ_counts.append( '\t'.join([ str(y) for y in x ]) )
 
-			jcOut.write( "{}\t{}\t{}\n".format(exitron_id, ';'.join(labels), '\t'.join(SJ_counts) ) )
-			seen.add(exitron_id)
+					if sum([ y >= 0 for y in x ]) >= min_count:
+						labels.append( g )
+
+				jcOut.write( "{}\t{}\t{}\n".format(exitron_id, ';'.join(labels), '\t'.join(SJ_counts) ) )
+				seen.add(exitron_id)
 
 	infoOut.close(), bedOut.close(), eceOut.close()
 
-	subprocess.call("rm -f "+work_dir+"junctions_GTF_map.tmp", shell=True)		
+	subprocess.call("rm -f "+work_dir+"junctions_GTF_map.tmp", shell=True)
 
 def prepare_bam_files(work_dir, bam_file, file_handle, genome_fasta, NPROC=4):
-	""" Extract the unique reads and unique exonic reads from the 
+	""" Extract the unique reads and unique exonic reads from the
 	supplied bam file, index and output to the working directory. """
 
 	# Extract unique reads
@@ -130,7 +136,7 @@ def prepare_bam_files(work_dir, bam_file, file_handle, genome_fasta, NPROC=4):
 	subprocess.call("samtools index {}".format(uniq_bam), shell=True)
 
 def prepare_multi_bam(work_dir, samples_file, genome_fasta, bam_filename, NPROC=4):
-	""" Loop through the samples in the file and 
+	""" Loop through the samples in the file and
 	prepare the bam files. """
 
 	for line in open(samples_file):
@@ -151,12 +157,12 @@ def quality_score(A, B, C, D, cov):
 	elif min(cov) >= 10 or D >= 10: RS = ">=10"
 	else: RS = "<10"
 
-	''' 
-		Filter exitron events based on (median) read coverage and read balance. 
-		The goal of the binomial test (balance) was to exclude events in which there is a 
-		high imbalance in read counts among the two exon-intron junctions and the intron 
+	'''
+		Filter exitron events based on (median) read coverage and read balance.
+		The goal of the binomial test (balance) was to exclude events in which there is a
+		high imbalance in read counts among the two exon-intron junctions and the intron
 		body sequence. Such imbalances can arise from neighboring alternative 5' and/or 3'
-		splice sites or overlapping genes, confound PSI estimates, and lead to the false 
+		splice sites or overlapping genes, confound PSI estimates, and lead to the false
 		detection of exitrons.
 
 		p-value (binomial{ 	M = min(A, B, C),
@@ -168,7 +174,7 @@ def quality_score(A, B, C, D, cov):
 		N = number of trials
 		P = probability of success
 
-		statsmodels.stats.proportion.binom_test(M, N, 1/3.5, alternative="smaller") 
+		statsmodels.stats.proportion.binom_test(M, N, 1/3.5, alternative="smaller")
 	'''
 	if 	binom_test(
 		min(A, B, C),
@@ -181,27 +187,27 @@ def quality_score(A, B, C, D, cov):
 	return RS, balance
 
 def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle):
-	''' Calculate exitron PSI values, based on the coverage of the 
-		unique exonic reads. 
-							
+	''' Calculate exitron PSI values, based on the coverage of the
+		unique exonic reads.
+
 							A		   B		 C
 						   ----		  ----		----
 		EEEEEEEEEEEEEEEEEEEEEXXXXXXXXXXXXXXXXXXXXXEEEEEEEEEEEEEEEEEEEEE
 						   --	                  --
-							 \                   / 
-							  \        D        / 							
+							 \                   /
+							  \        D        /
 	                           -----------------
-	                           	
+
 	    E = exon, X = exitron
 	    A = Reads aligning from -10 to +10 around exitron 5'SS
 	    B = Reads aligning from -10 to +10 around exitron middle point
 	    C = Reads aligning from -10 to +10 around exitron 3'SS
 	    D = Reads supporting exitron splicing
-	    
-		PSI = ( mean(A, B, C) / mean(A, B, C) + D) * 100 
+
+		PSI = ( mean(A, B, C) / mean(A, B, C) + D) * 100
 
 		Count the coverage per position in the A, B, and C regions based
-		on the CIGAR signatures of the aligned reads. 
+		on the CIGAR signatures of the aligned reads.
 
 		http://bioinformatics.cvr.ac.uk/blog/tag/cigar-string/
 		CIGAR
@@ -220,19 +226,19 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle):
 		Case2 (N/D):
 			Move the specified mapping position by the number associated with the operator.
 		Case3 (I/S/H/P):
-			Do nothing	
+			Do nothing
 	'''
 
 	import re
 
-	# Count the reads fully overlapping the A, B, and C region, 
-	# as well count the entire exitron coverage. 
+	# Count the reads fully overlapping the A, B, and C region,
+	# as well count the entire exitron coverage.
 	rc, info = {}, {}
 	for line in open(exitron_info):
 		if not line.startswith('#'):
 			exitron_id, t_id, gene_id, gene_name, EI_len, EIx3 = line.rstrip().split('\t')
 			info[exitron_id] = { 't_id': t_id, 'gene_id': gene_id, 'gene_name': gene_name, 'EI_len': EI_len, 'EIx3': EIx3 }
-			
+
 			c, coord, strand = exitron_id.split(':')
 			s, e = map(int, coord.split('-'))
 			m = s + int((e-s)/2)
@@ -303,7 +309,7 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle):
 			# Get coverage metrics
 			rs, rb = quality_score(A, B, C, D, rc[ei]['cov'])
 			fout.write( "{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{}\t{}\t{}\t{}\t{}\t{}\t{}/{:.0f}/{:.0f}/{}\n".format(ei, info[ei]["t_id"], info[ei]["gene_id"], info[ei]["gene_name"], info[ei]["EI_len"], info[ei]["EIx3"],
-				classic_PSI, new_PSI, rs, rb, 
+				classic_PSI, new_PSI, rs, rb,
 			 	A, B, C, D,
 			 	min(rc[ei]['cov']), np.mean(rc[ei]['cov']), np.median(rc[ei]['cov']), max(rc[ei]['cov'])))
 
@@ -322,8 +328,8 @@ def calculate_multi_PSI(work_dir, samples_file, exitrons_info, bam_dir):
 			calculate_PSI(work_dir, exitrons_info, uniq, sample_id)
 
 def parse_PSI(f):
-	""" Parse the PSI values. If an exitron's read score and 
-	read balance are not in the readScore or readBalance arrays, 
+	""" Parse the PSI values. If an exitron's read score and
+	read balance are not in the readScore or readBalance arrays,
 	the PSI value will be parsed as nan. """
 
 	psi = {}
@@ -348,7 +354,7 @@ def parse_gene_TPM(f):
 
 	tpm = {}
 	for line in open(f):
-		try: 
+		try:
 			gene_name, gene_length, eff_length, TPM, numReads = line.rstrip().split('\t')
 			tpm[gene_name] = float(TPM)
 		except ValueError: pass
@@ -428,7 +434,9 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 		if not line.startswith('#'):
 			cols = line.rstrip().split('\t')
 			d = { fields[i]: cols[i] if i in range(len(cols)) else None for i in range(len(fields)) }
-			tmp[d["group_id"]][d["sample_id"]] = d
+
+			if d["group_id"] in [reference_name, test_name]:
+				tmp[d["group_id"]][d["sample_id"]] = d
 
 			if paired:
 				try: pairs[d["pair_id"]][d["group_id"]] = tmp[d["group_id"]][d["sample_id"]]
@@ -477,7 +485,7 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 				tPSI = tPSI[fltr]
 				usedSamples = '{}'.format(','.join([ x.replace(reference_name, '') for x in refNames[fltr] ]))
 				nSamples = sum(fltr)
-			
+
 			# Filter reference and test individually
 			else:
 				rFltr = np.array([ x >= min_TPM for x in rTPM ])
@@ -501,7 +509,7 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 	fResults = open("{}{}_{}.{}.diff".format(work_dir, reference_name, test_name, file_handle), 'w')
 	fResults.write("Exitron ID\tTranscript ID\tGene ID\tGene Symbol\tEI length (nt)\tEI length is x3\t{}_mean\t{}_mean\tdiff\tp-value\n".format(reference_name, test_name))
 
-	if expr_filter: 
+	if expr_filter:
 		fFilter = open("{}{}_{}.{}.fltr".format(work_dir, reference_name, test_name, file_handle), 'w')
 		fFilter.write('#Exitron ID\tN\tsamples\n')
 
@@ -553,13 +561,13 @@ if __name__ == '__main__':
 	parser_b.add_argument('-b', '--bam', required=True, help="BAM alignment file.")
 	parser_b.add_argument('-f', '--file-handle', required=True, help="Unique file handle. The output files will be [work_dir]/uniq.[file-handle].bam.")
 	parser_b.add_argument('-g', '--genome-fasta', required=True, help="Genome fasta corresponding to the one used for the BAM file creation.")
-	parser_b.add_argument('--NPROC', type=stay_positive, default=4, help="Number of processes to use when running samtools.")	
+	parser_b.add_argument('--NPROC', type=stay_positive, default=4, help="Number of processes to use when running samtools.")
 
 	parser_c = subparsers.add_parser('prepare-multi-bam', help="Prepare BAM files for all samples in the samples.txt file.")
 	parser_c.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
 	parser_c.add_argument('-g', '--genome-fasta', required=True, help="Genome fasta corresponding to the one used for the BAM file creation.")
 	parser_c.add_argument('--bam-filename', default="Aligned.sortedByCoord.out.bam", help="BAM filename (not path). Assumes that all BAM files have the same name, but different paths.")
-	parser_c.add_argument('--NPROC', type=stay_positive, default=4, help="Number of processes to use when running samtools.")	
+	parser_c.add_argument('--NPROC', type=stay_positive, default=4, help="Number of processes to use when running samtools.")
 
 	parser_d = subparsers.add_parser('calculate-PSI', help="Calculate the exitron PSI.")
 	parser_d.add_argument('--exitrons-info', required=True, help="exitrons.info file (from identify-exitrons).")
@@ -579,7 +587,7 @@ if __name__ == '__main__':
 	parser_f.add_argument('--paired', action='store_true', help="Treat data as paired data. Requires the 4th column in the samples file to be the pair_id.")
 	parser_f.add_argument('--min-TPM', type=float, default=1, help="Minimum gene TPM cut-off.")
 	parser_f.add_argument('--expr-filter', action='store_true', help="Filter based on minimum gene TPM. It's assumed that the gene expression file is located in the path directory specified in the samples file.")
-	parser_f.add_argument('--gene-TPM-file', default="quant.genes.sf", help="Name of the Salmon per gene TPM quantification file.")	
+	parser_f.add_argument('--gene-TPM-file', default="quant.genes.sf", help="Name of the Salmon per gene TPM quantification file.")
 	parser_f.add_argument('--use-PSI', choices=["classic", "new"], default="classic", help="Choose which PSI to use.")
 
 	args = parser.parse_args()
@@ -610,13 +618,13 @@ if __name__ == '__main__':
 
 	elif args.command == "calculate-multi-PSI":
 		calculate_multi_PSI(work_dir, args.samples, args.exitrons_info, args.bam_dir)
-		log_settings(work_dir, args, 'a')	
+		log_settings(work_dir, args, 'a')
 
 	elif args.command == "compare":
 		compare(work_dir, args.samples, args.psi_dir, args.file_handle, args.reference, args.test, args.paired, args.min_TPM, args.expr_filter, args.gene_TPM_file, args.use_PSI)
 		log_settings(work_dir, args, 'a')
 
-	""" 
+	"""
 	CHANGELOG:
 		* Dropped support for TopHat2 junctions
 		* Got rid of the "weird" exitron last/first coordinate of the bordering exon annotation, the junction and exitron coordinates are now identical.
