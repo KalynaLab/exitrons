@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 import os
 import time
@@ -6,6 +6,9 @@ import argparse
 import subprocess
 import numpy as np
 from natsort import natsorted
+
+def add_slash(d):
+	return d if d.endswith('/') else d+'/'
 
 def log_settings(work_dir, args, write_mode='a'):
 
@@ -593,7 +596,7 @@ if __name__ == '__main__':
 	args = parser.parse_args()
 
 	# Create work_dir if not exists
-	work_dir = args.work_dir if args.work_dir.endswith('/') else args.work_dir + '/'
+	work_dir = add_slash(args.work_dir)
 	if not os.path.exists(work_dir): os.makedirs(work_dir)
 
 	# Identify exitrons
@@ -617,11 +620,11 @@ if __name__ == '__main__':
 			sys.stderr.write("One (or multiple) input files could not be found.")
 
 	elif args.command == "calculate-multi-PSI":
-		calculate_multi_PSI(work_dir, args.samples, args.exitrons_info, args.bam_dir)
+		calculate_multi_PSI(work_dir, args.samples, args.exitrons_info, add_slash(args.bam_dir))
 		log_settings(work_dir, args, 'a')
 
 	elif args.command == "compare":
-		compare(work_dir, args.samples, args.psi_dir, args.file_handle, args.reference, args.test, args.paired, args.min_TPM, args.expr_filter, args.gene_TPM_file, args.use_PSI)
+		compare(work_dir, args.samples, add_slash(args.psi_dir), args.file_handle, args.reference, args.test, args.paired, args.min_TPM, args.expr_filter, args.gene_TPM_file, args.use_PSI)
 		log_settings(work_dir, args, 'a')
 
 	"""
