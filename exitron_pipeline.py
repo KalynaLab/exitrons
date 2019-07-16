@@ -625,21 +625,9 @@ if __name__ == '__main__':
 			sys.stderr.write("One (or multiple) input files could not be found.")
 
 	elif args.command == "calculate-multi-PSI":
-		start_time = time.time()
 		calculate_multi_PSI(work_dir, args.samples, args.exitrons_info, add_slash(args.bam_dir), args.NPROC)
-		duration = time.time() - start_time
-		print(f"Finished in {duration} seconds")
 		log_settings(work_dir, args, 'a')
 
 	elif args.command == "compare":
 		compare(work_dir, args.samples, add_slash(args.psi_dir), args.file_handle, args.reference, args.test, args.paired, args.min_TPM, args.expr_filter, args.gene_TPM_file, args.use_PSI)
 		log_settings(work_dir, args, 'a')
-
-	"""
-	CHANGELOG:
-		* Dropped support for TopHat2 junctions
-		* Got rid of the "weird" exitron last/first coordinate of the bordering exon annotation, the junction and exitron coordinates are now identical.
-		* Also calculate the PSI based on the median exitron coverage
-		* Adjusted read coverage quality scores
-		* Slightly changed output values to include min/mean/median/max coverage values of the entire exitron
-	"""
