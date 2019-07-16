@@ -335,7 +335,7 @@ def calculate_multi_PSI(work_dir, samples_file, exitrons_info, bam_dir, NPROC):
 			group_id, path, sample_id = line.rstrip().split('\t')[:3]
 			print("Calculating {} PSIs. Started on {}".format(sample_id, time.asctime( time.localtime(time.time()) )))
 			uniq = "{}uniq.{}.bam".format(bam_dir, sample_id)
-			calculate_PSI(work_dir, exitrons_info, uniq, "mp."+sample_id, NPROC)
+			calculate_PSI(work_dir, exitrons_info, uniq, sample_id, NPROC)
 
 def parse_PSI(f):
 	""" Parse the PSI values. If an exitron's read score and
