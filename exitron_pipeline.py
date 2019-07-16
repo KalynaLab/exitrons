@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 
 import os
+import re
 import time
 import argparse
 import subprocess
 import numpy as np
+from subprocess import Popen, PIPE
 from natsort import natsorted
 
 def add_slash(d):
@@ -189,7 +191,64 @@ def quality_score(A, B, C, D, cov):
 
 	return RS, balance
 
-def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle):
+def get_exitron_coverage(exitron_id, uniq_bam):
+
+    c, coord, strand = exitron_id.split(':')
+    s, e = map(int, coord.split('-'))
+    m = s + int((e-s)/2)
+
+    # The 20nt regions should be fully covered by
+    # a read in order to be counted
+    ARange = set(range(s-10, s+10))
+    BRange = set(range(m-10, m+10))
+    CRange = set(range(e-10, e+10))
+
+    # Get the required read/junction gap signature
+    N = "{}N".format((e-s)+1)
+
+    # Extract the exitron coverage from the unique reads bam file
+    process = Popen(["samtools", "view", uniq_bam, "{}:{}-{}".format(c, s-10, e+10)], stdout=PIPE, stderr=PIPE, universal_newlines=True)
+    stdout, stderr = process.communicate()
+
+    A, B, C, D = 0, 0, 0, 0
+    EICov = { str(x): 0 for x in range(s, e) } # Exitron per position coverage
+    for aln in stdout.split('\n'):
+        try:
+            pos = int(aln.split('\t')[3])
+            cigar = aln.split('\t')[5]
+
+            # Go through the read alignment based on the cigar
+            current_pos = pos
+            for m in re.finditer('(\d+)(\w)', cigar):
+                alnLen, alnOperator = m.groups()
+                if alnOperator in ['M', 'X', '=']:
+
+                    alnRange = set(range(current_pos, (current_pos + int(alnLen))))
+                    current_pos += int(alnLen)
+
+                    # Check if a read fully coverage A, B, and/or class C
+                    if ARange <= alnRange: A += 1
+                    if BRange <= alnRange: B += 1
+                    if CRange <= alnRange: C += 1
+
+                    # Track the exitron per base coverage
+                    for x in alnRange:
+                        if str(x) in EICov:
+                            EICov[str(x)] += 1
+
+                elif alnOperator in ['N', 'D']:
+                    if current_pos == s and alnLen+alnOperator == N:
+                        D += 1
+                    current_pos += int(alnLen)
+
+                else:
+                    pass
+        except IndexError: # Skip the empty lines appended to the stdout
+            pass
+
+    return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
+
+def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
 	''' Calculate exitron PSI values, based on the coverage of the
 		unique exonic reads.
 
@@ -232,94 +291,42 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle):
 			Do nothing
 	'''
 
-	import re
+	from multiprocessing import Pool
 
-	# Count the reads fully overlapping the A, B, and C region,
-	# as well count the entire exitron coverage.
+    # Read exitron info
 	rc, info = {}, {}
 	for line in open(exitron_info):
 		if not line.startswith('#'):
 			exitron_id, t_id, gene_id, gene_name, EI_len, EIx3 = line.rstrip().split('\t')
 			info[exitron_id] = { 't_id': t_id, 'gene_id': gene_id, 'gene_name': gene_name, 'EI_len': EI_len, 'EIx3': EIx3 }
+	exitrons = [ x for x in natsorted(info) ]
 
-			c, coord, strand = exitron_id.split(':')
-			s, e = map(int, coord.split('-'))
-			m = s + int((e-s)/2)
+    # Collect coverage data into a dictionary
+	job_args = [(x, uniq_bam) for x in exitrons]
+	with Pool(processes=NPROC) as p:
+		rc = dict(zip(exitrons, p.starmap(get_exitron_coverage, job_args)))
 
-			# The 20nt regions should be fully covered by a read
-			# in order to be counted
-			ARange = set(range(s-10, s+10))
-			BRange = set(range(m-10, m+10))
-			CRange = set(range(e-10, e+10))
-
-			# Get the required read/junction gap signature
-			N = "{}N".format((e-s)+1)
-
-			# Extract the unique reads from the bam file
-			subprocess.call("samtools view {} {}:{}-{} > {}tmp.sam".format(uniq_bam, c, s-10, e+10, work_dir), shell=True)
-
-			A, B, C, D = 0, 0, 0, 0
-			EICov = { str(x): 0 for x in range(s, e) } # Exitron per position coverage
-			for aln in open(work_dir+"tmp.sam"):
-				pos = int(aln.split('\t')[3])
-				cigar = aln.split('\t')[5]
-
-				# Go through the read alignment based on the CIGAR
-				current_pos = pos
-				for m in re.finditer('(\d+)(\w)', cigar):
-					alnLen, alnOperator = m.groups()
-					if alnOperator in ['M', 'X', '=']:
-
-						alnRange = set(range(current_pos, (current_pos + int(alnLen))))
-						current_pos += int(alnLen)
-
-						# Check if a read fully coverage A, B, and/or C
-						if ARange <= alnRange: A += 1
-						if BRange <= alnRange: B += 1
-						if CRange <= alnRange: C += 1
-
-						# Track the exitron per base coverage
-						for x in alnRange:
-							if str(x) in EICov:
-								EICov[str(x)] += 1
-
-					elif alnOperator in ['N', 'D']:
-						if current_pos == s and alnLen+alnOperator == N:
-							D += 1
-						current_pos += int(alnLen)
-
-					else:
-						pass
-
-			# Store exitron coverage
-			rc[exitron_id] = { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
-
-	# Calculate PSI and some coverage metrics
+    # Calculate PSI and output
 	with open("{}{}.psi".format(work_dir, file_handle), 'w') as fout:
 		fout.write( "Exitron ID\tTranscript ID\tGene ID\tGene Symbol\tEI length (nt)\tEI length is x3\tClassic PSI\tNew PSI\tCoverage Score\tRead Balance\tA\tB\tC\tD\tMin/Mean/Median/Max\n" )
-		for ei in natsorted(rc):
+		for ei in exitrons:
 			A, B, C, D = [ rc[ei][x] for x in ['A', 'B', 'C', 'D'] ]
 
-			# Classic PSI, based on the A, B, C values
+            # Classic PSI, based on the A, B, C values
 			try: classic_PSI = (np.mean([A, B, C]) / (np.mean([A, B, C]) + D)) * 100
-			except ZeroDivisionError: classic_PSI = 'nan'
+			except ZeroDivisionError: classis_PSI = 'nan'
 
-			# New PSI, based on the median coverage
-			# of the entire exitron
-			try: new_PSI = ( np.median(rc[ei]['cov']) / (np.median(rc[ei]['cov']) + D) ) * 100
-			except ZeroDivisionError: new_PSI = 'nan'
+            # New PSI, bsaed on the median coverage of the entire exitron
+			try: new_PSI = (np.median(rc[ei]['cov']) / (np.median(rc[ei]['cov']) + D)) * 100
+			except ZeroDivisonError: new_PSI = 'nan'
 
-			# Get coverage metrics
 			rs, rb = quality_score(A, B, C, D, rc[ei]['cov'])
 			fout.write( "{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{}\t{}\t{}\t{}\t{}\t{}\t{}/{:.0f}/{:.0f}/{}\n".format(ei, info[ei]["t_id"], info[ei]["gene_id"], info[ei]["gene_name"], info[ei]["EI_len"], info[ei]["EIx3"],
 				classic_PSI, new_PSI, rs, rb,
-			 	A, B, C, D,
-			 	min(rc[ei]['cov']), np.mean(rc[ei]['cov']), np.median(rc[ei]['cov']), max(rc[ei]['cov'])))
+				A, B, C, D,
+				min(rc[ei]['cov']), np.mean(rc[ei]['cov']), np.median(rc[ei]['cov']), max(rc[ei]['cov'])))
 
-	# Clean-up
-	subprocess.call("rm -f {}tmp*".format(work_dir), shell=True)
-
-def calculate_multi_PSI(work_dir, samples_file, exitrons_info, bam_dir):
+def calculate_multi_PSI(work_dir, samples_file, exitrons_info, bam_dir, NPROC):
 	""" Loop through the samples in the samples file and
 	calculate the PSI for all exitrons for each sample. """
 
@@ -328,7 +335,7 @@ def calculate_multi_PSI(work_dir, samples_file, exitrons_info, bam_dir):
 			group_id, path, sample_id = line.rstrip().split('\t')[:3]
 			print("Calculating {} PSIs. Started on {}".format(sample_id, time.asctime( time.localtime(time.time()) )))
 			uniq = "{}uniq.{}.bam".format(bam_dir, sample_id)
-			calculate_PSI(work_dir, exitrons_info, uniq, sample_id)
+			calculate_PSI(work_dir, exitrons_info, uniq, "mp."+sample_id, NPROC)
 
 def parse_PSI(f):
 	""" Parse the PSI values. If an exitron's read score and
@@ -538,12 +545,7 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 
 if __name__ == '__main__':
 
-	def stay_positive(val):
-		if int(val) < 1:
-			raise argparse.ArgumentTypeError("--NPROC must be at least 1.")
-		return int(val)
-
-	version = "0.5.0"
+	version = "0.5.2"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
@@ -564,22 +566,25 @@ if __name__ == '__main__':
 	parser_b.add_argument('-b', '--bam', required=True, help="BAM alignment file.")
 	parser_b.add_argument('-f', '--file-handle', required=True, help="Unique file handle. The output files will be [work_dir]/uniq.[file-handle].bam.")
 	parser_b.add_argument('-g', '--genome-fasta', required=True, help="Genome fasta corresponding to the one used for the BAM file creation.")
-	parser_b.add_argument('--NPROC', type=stay_positive, default=4, help="Number of processes to use when running samtools.")
+	parser_b.add_argument('--NPROC', type=int, default=4, choices=[i for i in range(os.cpu_count()+1)], help="Number of processes to use when running samtools.")
 
 	parser_c = subparsers.add_parser('prepare-multi-bam', help="Prepare BAM files for all samples in the samples.txt file.")
 	parser_c.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
 	parser_c.add_argument('-g', '--genome-fasta', required=True, help="Genome fasta corresponding to the one used for the BAM file creation.")
 	parser_c.add_argument('--bam-filename', default="Aligned.sortedByCoord.out.bam", help="BAM filename (not path). Assumes that all BAM files have the same name, but different paths.")
-	parser_c.add_argument('--NPROC', type=stay_positive, default=4, help="Number of processes to use when running samtools.")
+	parser_c.add_argument('--NPROC', type=int, default=4, choices=[i for i in range(os.cpu_count()+1)], help="Number of processes to use when running samtools.")
 
 	parser_d = subparsers.add_parser('calculate-PSI', help="Calculate the exitron PSI.")
 	parser_d.add_argument('--exitrons-info', required=True, help="exitrons.info file (from identify-exitrons).")
 	parser_d.add_argument('--uniq', required=True, help="Unique reads BAM file (from prepare-bam).")
+	parser_d.add_argument('--file-handle', required=True, help="Output file handle. File name will be <file_handle>.psi.")
+	parser_d.add_argument('--NPROC', type=int, default=os.cpu_count(), choices=[i for i in range(1, os.cpu_count()+1)], help="Number of parallel processes to use.")
 
 	parser_e = subparsers.add_parser('calculate-multi-PSI', help="Calculate PSI for all samples in the samples.txt file.")
 	parser_e.add_argument('--bam-dir', required=True, help="Path to the prepared bam files (from prepare-bam).")
 	parser_e.add_argument('--exitrons-info', required=True, help="exitrons.info file (from identify-exitrons).")
 	parser_e.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
+	parser_e.add_argument('--NPROC', type=int, default=os.cpu_count(), choices=[i for i in range(1, os.cpu_count()+1)], help="Number of parallel processes to use.")
 
 	parser_f = subparsers.add_parser('compare', help="Compare exitrons of two groups.")
 	parser_f.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
@@ -620,7 +625,10 @@ if __name__ == '__main__':
 			sys.stderr.write("One (or multiple) input files could not be found.")
 
 	elif args.command == "calculate-multi-PSI":
-		calculate_multi_PSI(work_dir, args.samples, args.exitrons_info, add_slash(args.bam_dir))
+		start_time = time.time()
+		calculate_multi_PSI(work_dir, args.samples, args.exitrons_info, add_slash(args.bam_dir), args.NPROC)
+		duration = time.time() - start_time
+		print(f"Finished in {duration} seconds")
 		log_settings(work_dir, args, 'a')
 
 	elif args.command == "compare":
