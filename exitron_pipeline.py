@@ -3,11 +3,13 @@
 import os
 import re
 import time
+import random
 import argparse
 import subprocess
 import numpy as np
 from subprocess import Popen, PIPE
 from natsort import natsorted
+from scipy import stats
 
 def add_slash(d):
 	return d if d.endswith('/') else d+'/'
@@ -193,82 +195,7 @@ def quality_score(A, B, C, D, cov):
 
 def get_exitron_coverage(exitron_id, uniq_bam):
 
-    c, coord, strand = exitron_id.split(':')
-    s, e = map(int, coord.split('-'))
-    m = s + int((e-s)/2)
-
-    # The 20nt regions should be fully covered by
-    # a read in order to be counted
-    ARange = set(range(s-10, s+10))
-    BRange = set(range(m-10, m+10))
-    CRange = set(range(e-10, e+10))
-
-    # Get the required read/junction gap signature
-    N = "{}N".format((e-s)+1)
-
-    # Extract the exitron coverage from the unique reads bam file
-    process = Popen(["samtools", "view", uniq_bam, "{}:{}-{}".format(c, s-10, e+10)], stdout=PIPE, stderr=PIPE, universal_newlines=True)
-    stdout, stderr = process.communicate()
-
-    A, B, C, D = 0, 0, 0, 0
-    EICov = { str(x): 0 for x in range(s, e) } # Exitron per position coverage
-    for aln in stdout.split('\n'):
-        try:
-            pos = int(aln.split('\t')[3])
-            cigar = aln.split('\t')[5]
-
-            # Go through the read alignment based on the cigar
-            current_pos = pos
-            for m in re.finditer('(\d+)(\w)', cigar):
-                alnLen, alnOperator = m.groups()
-                if alnOperator in ['M', 'X', '=']:
-
-                    alnRange = set(range(current_pos, (current_pos + int(alnLen))))
-                    current_pos += int(alnLen)
-
-                    # Check if a read fully coverage A, B, and/or class C
-                    if ARange <= alnRange: A += 1
-                    if BRange <= alnRange: B += 1
-                    if CRange <= alnRange: C += 1
-
-                    # Track the exitron per base coverage
-                    for x in alnRange:
-                        if str(x) in EICov:
-                            EICov[str(x)] += 1
-
-                elif alnOperator in ['N', 'D']:
-                    if current_pos == s and alnLen+alnOperator == N:
-                        D += 1
-                    current_pos += int(alnLen)
-
-                else:
-                    pass
-        except IndexError: # Skip the empty lines appended to the stdout
-            pass
-
-    return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
-
-def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
-	''' Calculate exitron PSI values, based on the coverage of the
-		unique exonic reads.
-
-							A		   B		 C
-						   ----		  ----		----
-		EEEEEEEEEEEEEEEEEEEEEXXXXXXXXXXXXXXXXXXXXXEEEEEEEEEEEEEEEEEEEEE
-						   --	                  --
-							 \                   /
-							  \        D        /
-	                           -----------------
-
-	    E = exon, X = exitron
-	    A = Reads aligning from -10 to +10 around exitron 5'SS
-	    B = Reads aligning from -10 to +10 around exitron middle point
-	    C = Reads aligning from -10 to +10 around exitron 3'SS
-	    D = Reads supporting exitron splicing
-
-		PSI = ( mean(A, B, C) / mean(A, B, C) + D) * 100
-
-		Count the coverage per position in the A, B, and C regions based
+	""" Count the coverage per position in the A, B, and C regions based
 		on the CIGAR signatures of the aligned reads.
 
 		http://bioinformatics.cvr.ac.uk/blog/tag/cigar-string/
@@ -289,7 +216,83 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
 			Move the specified mapping position by the number associated with the operator.
 		Case3 (I/S/H/P):
 			Do nothing
-	'''
+	"""
+
+	c, coord, strand = exitron_id.split(':')
+	s, e = map(int, coord.split('-'))
+	m = s + int((e-s)/2)
+
+	# The 20nt regions should be fully covered by
+	# a read in order to be counted
+	ARange = set(range(s-10, s+10))
+	BRange = set(range(m-10, m+10))
+	CRange = set(range(e-10, e+10))
+
+    # Get the required read/junction gap signature
+	N = "{}N".format((e-s)+1)
+
+    # Extract the exitron coverage from the unique reads bam file
+	process = Popen(["samtools", "view", uniq_bam, "{}:{}-{}".format(c, s-10, e+10)], stdout=PIPE, stderr=PIPE, universal_newlines=True)
+	stdout, stderr = process.communicate()
+
+	A, B, C, D = 0, 0, 0, 0
+	EICov = { str(x): 0 for x in range(s, e) } # Exitron per position coverage
+	for aln in stdout.split('\n'):
+		try:
+			pos = int(aln.split('\t')[3])
+			cigar = aln.split('\t')[5]
+
+            # Go through the read alignment based on the cigar
+			current_pos = pos
+			for m in re.finditer('(\d+)(\w)', cigar):
+				alnLen, alnOperator = m.groups()
+				if alnOperator in ['M', 'X', '=']:
+
+					alnRange = set(range(current_pos, (current_pos + int(alnLen))))
+					current_pos += int(alnLen)
+
+                    # Check if a read fully coverage A, B, and/or class C
+					if ARange <= alnRange: A += 1
+					if BRange <= alnRange: B += 1
+					if CRange <= alnRange: C += 1
+
+                    # Track the exitron per base coverage
+					for x in alnRange:
+						if str(x) in EICov:
+							EICov[str(x)] += 1
+
+				elif alnOperator in ['N', 'D']:
+					if current_pos == s and alnLen+alnOperator == N:
+						D += 1
+					current_pos += int(alnLen)
+
+				else:
+					pass
+		except IndexError: # Skip the empty lines appended to the stdout
+			pass
+
+	return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
+
+def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
+	""" Calculate exitron PSI values, based on the coverage of the
+		unique exonic reads.
+
+							A		   B		 C
+						   ----		  ----		----
+		EEEEEEEEEEEEEEEEEEEEEXXXXXXXXXXXXXXXXXXXXXEEEEEEEEEEEEEEEEEEEEE
+						   --	                  --
+							 \                   /
+							  \        D        /
+	                           -----------------
+
+	    E = exon, X = exitron
+	    A = Reads aligning from -10 to +10 around exitron 5'SS
+	    B = Reads aligning from -10 to +10 around exitron middle point
+	    C = Reads aligning from -10 to +10 around exitron 3'SS
+	    D = Reads supporting exitron splicing
+
+		PSI = ( mean(A, B, C) / mean(A, B, C) + D) * 100
+	"""
 
 	from multiprocessing import Pool
 
@@ -370,72 +373,65 @@ def parse_gene_TPM(f):
 		except ValueError: pass
 	return tpm
 
-def monte_carlo_permutation_test(x, y, nmc=10000):
+def permutation_test(control, test, statistic="mean", nperm=10000):
 
-	import math
+    n = len(control)
 
-	# Calculate the unique number of combinations
-	# without replacement
-	n = len(x) + len(y)
-	r = len(x)
-	N = math.factorial(n) / math.factorial(r) / math.factorial(n-r)
+    # Calculate the test statistic for the observed data
+    if statistic == "t.test": obs = stats.ttest_ind(control, test)[0]
+    elif statistic == "mean": obs = np.mean(test) - np.mean(control)
+    elif statistic == "median": obs = np.median(test) - np.median(control)
 
-	# Count the number of times the difference of the mean
-	# of the randomly permutated samples is bigger than the
-	# observed difference of the mean for x and y
-	k, diff = 0.0, abs(np.nanmean(x) - np.nanmean(y))
-	xy = np.concatenate([x, y])
+    # Calculate the test statistic based on the random data
+    rndm_obs, val = [], control + test
+    for i in range(nperm):
+        random.shuffle(val)
+        if statistic == "t.test": rndm_obs.append(stats.ttest_ind(val[:n], val[n:])[0])
+        elif statistic == "mean": rndm_obs.append( np.mean(val[:n]) - np.mean(val[n:]) )
+        elif statistic == "median": rndm_obs.append( np.median(val[:n]) - np.median(val[n:]) )
 
-	if N > nmc: # Do nmc random permutations
-		for i in range(nmc):
-			xy = np.concatenate([x, y])
-			np.random.shuffle(xy)
-			k += diff < abs(np.nanmean(xy[:r]) - np.nanmean(xy[r:]))
-		return k / nmc
+    # Check the number of times the random test statistic
+    # was equal or greater than the observed statistic
+    k = sum([ abs(r) >= abs(obs) for r in rndm_obs ])
+    return k / nperm
 
-	else: # Check all permutations
-		from itertools import combinations
+def paired_permutation_test(control, test, statistic="mean", nperm=10000):
 
-		xy = np.concatenate([x, y])
-		xy_indx = range(n)
-		for comb in combinations(xy_indx, r):
-			new_x = [ xy[i] for i in comb ]
-			new_y = [ xy[i] for i in set(xy_indx).difference(set(comb)) ]
-			k += diff < abs(np.nanmean(new_x) - np.nanmean(new_y))
-		return k / N
+    n = len(control)
 
-def paired_permutation_test(x, y, max_2k=100000):
+    # Calculate the test statistic for the observed data
+    diff = [ test[i]-control[i] for i in range(n) ]
+    if statistic == "t.test": obs = stats.ttest_1samp(diff, 0)[0]
+    elif statistic == "mean": obs = np.mean(diff)
+    elif statistic == "median": obs = np.median(diff)
 
-	"""
-		https://arxiv.org/pdf/1603.00214.pdf -> Haven't read it, but is about permuting incomplete paired data
-		http://axon.cs.byu.edu/Dan/478/assignments/permutation_test.php
+    rndm_obs = []
+    for i in range(nperm):
+        signs = [ random.choice([1, -1]) for i in range(n) ]
+        rndm_diff = [ x*s for x, s in zip(diff, signs) ]
 
-		1) Obtain a set of k pairs of estimates {(a1, b1), (a2, b2), ..., (ak, bk)} for (M1, M2)
-		2) Calculate the average difference, diff = sum([ ai-bi for i in k ]) / k
-		3) Let n = 0
-		4) For each possible permutation of swapping ai and bi (swapping labels)
-			a) Calculate the average difference, new_diff = sum([ ai-bi for i in k ]) / k
-			b) if abs(new_diff) >= abs(diff) => n += 1
-		5) Report p = n/2**k
-	"""
+        # Calculate the test statistic based on the random data
+        if statistic == "t.test": rndm_obs.append(stats.ttest_1samp(rndm_diff, 0)[0])
+        elif statistic == "mean": rndm_obs.append(np.mean(rndm_diff))
+        elif statistic == "median": rndm_obs.append(np.median(rndm_diff))
 
-	from itertools import product
+    # Check the number of times the random test statistic
+    # was equal or greater than the observed statistic
+    k = sum([ abs(r) >= abs(obs) for r in rndm_obs ])
+    return k / nperm
 
-	# Calculate the differences and average difference
-	k = len(x)
-	diff = [ x[i]-y[i] for i in range(k) ]
-	avg_diff = np.nanmean(diff)
+def printProgressBar(iteration, total, prefix="Progress:", suffix="", decimals=1, length=50, fill='#'):
+	# https://stackoverflow.com/questions/3173320/text-progress-bar-in-the-console
+	percent = ("{0:." + str(decimals) + "f}").format(100 * (iteration / float(total)))
+	filledLength = int(length * iteration // total)
+	bar = fill * filledLength + '-' * (length - filledLength)
+	print('\r%s [%s] %s%% %s' % (prefix, bar, percent, suffix), end = '\r')
+	if iteration == total:
+		print()
 
-	# Go through the permutations
-	n = 0
-	for i, signs in enumerate(product([1, -1], repeat=k)):
-		if i < max_2k:
-			new_avg_diff = np.nanmean([ diff[j]*signs[j] for j in range(k) ])
-			if abs(new_avg_diff) >= abs(avg_diff): n += 1
-		else: break
-	return n / (2**k) if (2**k) < max_2k else n / max_2k
+def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_name, paired=True, min_TPM=1, expr_filter=False, gene_TPM_file=None, use_PSI="classic_PSI", statistic="mean", nperm=10000):
 
-def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_name, paired=True, min_TPM=1, expr_filter=False, gene_TPM_file=None, use_PSI="classic_PSI"):
+	import warnings
 
 	# Parse the samples
 	tmp, pairs, reference, test = { reference_name: {}, test_name: {} }, {}, [], []
@@ -474,47 +470,54 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 	refNames = np.array([ r["sample_id"] for r in reference ])
 	tstNames = np.array([ t["sample_id"] for t in test ])
 
-	for ei in refPSI[0]:
+	N = len(refPSI[0])
+	printProgressBar(0, N)
+	with warnings.catch_warnings():
+		warnings.simplefilter("ignore", category=RuntimeWarning)
+		for i, ei in enumerate(refPSI[0]):
 
-		rPSI = np.array([ r[ei][use_PSI+"_PSI"] for r in refPSI ])
-		tPSI = np.array([ t[ei][use_PSI+"_PSI"] for t in tstPSI ])
+			rPSI = np.array([ r[ei][use_PSI+"_PSI"] for r in refPSI ])
+			tPSI = np.array([ t[ei][use_PSI+"_PSI"] for t in tstPSI ])
 
-		# Filter based on gene TPM cut-off (or not)
-		nSamples, usedSamples = "NA", "NA"
-		if expr_filter:
+			# Filter based on gene TPM cut-off (or not)
+			nSamples, usedSamples = "NA", "NA"
+			if expr_filter:
 
-			eiGene = refPSI[0][ei]["gene_id"]
-			rTPM = np.array([ r[eiGene] for r in refTPM ])
-			tTPM = np.array([ t[eiGene] for t in tstTPM ])
+				eiGene = refPSI[0][ei]["gene_id"]
+				rTPM = np.array([ r[eiGene] for r in refTPM ])
+				tTPM = np.array([ t[eiGene] for t in tstTPM ])
 
-			# Select only those pairs for which the TPM cut-off
-			# is exceeded for both the reference and test
-			if paired:
-				fltr = np.array([ z for z in map( lambda x, y: (x >= min_TPM) & (y >= min_TPM), rTPM, tTPM ) ])
-				rPSI = rPSI[fltr]
-				tPSI = tPSI[fltr]
-				usedSamples = '{}'.format(','.join([ x.replace(reference_name, '') for x in refNames[fltr] ]))
-				nSamples = sum(fltr)
+				# Select only those pairs for which the TPM cut-off
+				# is exceeded for both the reference and test
+				if paired:
+					fltr = np.array([ z for z in map( lambda x, y: (x >= min_TPM) & (y >= min_TPM), rTPM, tTPM ) ])
+					rPSI = rPSI[fltr]
+					tPSI = tPSI[fltr]
+					usedSamples = '{}'.format(','.join([ x.replace(reference_name, '') for x in refNames[fltr] ]))
+					nSamples = sum(fltr)
 
-			# Filter reference and test individually
-			else:
-				rFltr = np.array([ x >= min_TPM for x in rTPM ])
-				tFltr = np.array([ x >= min_TPM for x in tTPM ])
-				rPSI = rPSI[rFltr]
-				tPSI = tPSI[tFltr]
-				usedSamples = '{};{}'.format(','.join(refNames[rFltr]), ','.join(tstNames[tFltr]))
-				nSamples = '{};{}'.format(sum(rFltr), sum(tFltr))
+				# Filter reference and test individually
+				else:
+					rFltr = np.array([ x >= min_TPM for x in rTPM ])
+					tFltr = np.array([ x >= min_TPM for x in tTPM ])
+					rPSI = rPSI[rFltr]
+					tPSI = tPSI[tFltr]
+					usedSamples = '{};{}'.format(','.join(refNames[rFltr]), ','.join(tstNames[tFltr]))
+					nSamples = '{};{}'.format(sum(rFltr), sum(tFltr))
 
-		# Significance testing
-		results[ei] = {
-			'nSamples': nSamples,
-			'usedSamples': usedSamples,
-			'p-value': paired_permutation_test(rPSI, tPSI) if paired else monte_carlo_permutation_test(rPSI, tPSI),
-			'meanRefPSI': np.nanmean(rPSI),
-			'meanTstPSI': np.nanmean(tPSI),
-			'dPSI': np.nanmean(tPSI) - np.nanmean(rPSI)
-		}
-		results[ei]['p-value'] = results[ei]['p-value'] if results[ei]['nSamples'] else float('nan')
+			# Significance testing
+			results[ei] = {
+				'nSamples': nSamples,
+				'usedSamples': usedSamples,
+				'p-value': paired_permutation_test(rPSI, tPSI, statistic, nperm) if paired else monte_carlo_permutation_test(rPSI, tPSI, statistic, nperm),
+				'meanRefPSI': np.nanmean(rPSI),
+				'meanTstPSI': np.nanmean(tPSI),
+				'dPSI': np.nanmean(tPSI) - np.nanmean(rPSI)
+			}
+			results[ei]['p-value'] = results[ei]['p-value'] if results[ei]['nSamples'] else float('nan')
+
+			# Output progress bar
+			printProgressBar(i+1, N)
 
 	fResults = open("{}{}_{}.{}.diff".format(work_dir, reference_name, test_name, file_handle), 'w')
 	fResults.write("Exitron ID\tTranscript ID\tGene ID\tGene Symbol\tEI length (nt)\tEI length is x3\t{}_mean\t{}_mean\tdiff\tp-value\n".format(reference_name, test_name))
@@ -545,7 +548,7 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 
 if __name__ == '__main__':
 
-	version = "0.5.2"
+	version = "0.5.3"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
@@ -597,6 +600,8 @@ if __name__ == '__main__':
 	parser_f.add_argument('--expr-filter', action='store_true', help="Filter based on minimum gene TPM. It's assumed that the gene expression file is located in the path directory specified in the samples file.")
 	parser_f.add_argument('--gene-TPM-file', default="quant.genes.sf", help="Name of the Salmon per gene TPM quantification file.")
 	parser_f.add_argument('--use-PSI', choices=["classic", "new"], default="classic", help="Choose which PSI to use.")
+	parser_f.add_argument('--statistic', default="mean", choices=["mean", "median", "t.test"], help="Test statistic to use for the permutation test.")
+	parser_f.add_argument('--nperm', type=int, default=10000, help="Number of permutations to run.")
 
 	args = parser.parse_args()
 
@@ -629,5 +634,5 @@ if __name__ == '__main__':
 		log_settings(work_dir, args, 'a')
 
 	elif args.command == "compare":
-		compare(work_dir, args.samples, add_slash(args.psi_dir), args.file_handle, args.reference, args.test, args.paired, args.min_TPM, args.expr_filter, args.gene_TPM_file, args.use_PSI)
+		compare(work_dir, args.samples, add_slash(args.psi_dir), args.file_handle, args.reference, args.test, args.paired, args.min_TPM, args.expr_filter, args.gene_TPM_file, args.use_PSI, args.statistic, args.nperm)
 		log_settings(work_dir, args, 'a')
