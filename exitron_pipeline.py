@@ -2,6 +2,7 @@
 
 import os
 import re
+import sys
 import time
 import random
 import argparse
@@ -479,8 +480,7 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 			rPSI = np.array([ r[ei][use_PSI+"_PSI"] for r in refPSI ])
 			tPSI = np.array([ t[ei][use_PSI+"_PSI"] for t in tstPSI ])
 
-			# Filter based on gene TPM cut-off (or not)
-			nSamples, usedSamples = "NA", "NA"
+			# Filter based on gene TPM cut-off and PSI NaN values
 			if expr_filter:
 
 				eiGene = refPSI[0][ei]["gene_id"]
@@ -490,18 +490,46 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 				# Select only those pairs for which the TPM cut-off
 				# is exceeded for both the reference and test
 				if paired:
+
+					# TPM filter
 					fltr = np.array([ z for z in map( lambda x, y: (x >= min_TPM) & (y >= min_TPM), rTPM, tTPM ) ])
-					rPSI = rPSI[fltr]
-					tPSI = tPSI[fltr]
-					usedSamples = '{}'.format(','.join([ x.replace(reference_name, '') for x in refNames[fltr] ]))
+					rPSI, tPSI, tmpNames = rPSI[fltr], tPSI[fltr], refNames[fltr]
+
+					# PSI NaN filter
+					try: # In case no samples are left after the first filter
+						fltr = np.array([ z for z in map( lambda x, y: (not np.isnan(x)) & (not np.isnan(y)), rPSI, tPSI ) ])
+						rPSI, tPSI = rPSI[fltr], tPSI[fltr]
+						usedSamples = '{}'.format(','.join([ x.replace(reference_name, '') for x in tmpNames[fltr] ]))
+					except IndexError:
+						usedSamples = ''
+
 					nSamples = sum(fltr)
 
 				# Filter reference and test individually
 				else:
-					rFltr = np.array([ x >= min_TPM for x in rTPM ])
-					tFltr = np.array([ x >= min_TPM for x in tTPM ])
+					# TPM and PSI NaN filter
+					rFltr = np.array([ z for z in map( lambda x, y: (x >= min_TPM) & (not np.isnan(y)), rTPM, rPSI ) ])
+					tFltr = np.array([ z for z in map( lambda x, y: (x >= min_TPM) & (not np.isnan(y)), tTPM, tPSI ) ])
+
 					rPSI = rPSI[rFltr]
 					tPSI = tPSI[tFltr]
+
+					usedSamples = '{};{}'.format(','.join(refNames[rFltr]), ','.join(tstNames[tFltr]))
+					nSamples = '{};{}'.format(sum(rFltr), sum(tFltr))
+
+			# Still going to filter on PSI NaN
+			else:
+				if paired:
+					fltr = np.array([ z for z in map( lambda x, y: (not np.isnan(x)) & (not np.isnan(y)), rPSI, tPSI ) ])
+					rPSI, tPSI = rPSI[fltr], tPSI[fltr]
+					usedSamples = '{}'.format(','.join([ x.replace(reference_name, '') for x in refNames[fltr] ]))
+					nSamples = sum(fltr)
+
+				else:
+					rFltr = np.array([ not np.isnan(x) for x in rPSI ])
+					tFltr = np.array([ not np.isnan(x) for x in tPSI ])
+					rPSI = rPSI[rFltr], tPSI[tFltr]
+
 					usedSamples = '{};{}'.format(','.join(refNames[rFltr]), ','.join(tstNames[tFltr]))
 					nSamples = '{};{}'.format(sum(rFltr), sum(tFltr))
 
@@ -522,9 +550,8 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 	fResults = open("{}{}_{}.{}.diff".format(work_dir, reference_name, test_name, file_handle), 'w')
 	fResults.write("Exitron ID\tTranscript ID\tGene ID\tGene Symbol\tEI length (nt)\tEI length is x3\t{}_mean\t{}_mean\tdiff\tp-value\n".format(reference_name, test_name))
 
-	if expr_filter:
-		fFilter = open("{}{}_{}.{}.fltr".format(work_dir, reference_name, test_name, file_handle), 'w')
-		fFilter.write('#Exitron ID\tN\tsamples\n')
+	fFilter = open("{}{}_{}.{}.fltr".format(work_dir, reference_name, test_name, file_handle), 'w')
+	fFilter.write('#Exitron ID\tN\tsamples\n')
 
 	for ei in natsorted(results):
 		fResults.write("{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{:.3f}\t{:.9f}\t{}\n".format(
@@ -541,14 +568,13 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 			results[ei]["nSamples"])
 		)
 
-		if expr_filter: fFilter.write("{}\t{}\t{}\n".format(ei, results[ei]["nSamples"], results[ei]["usedSamples"]))
+		fFilter.write("{}\t{}\t{}\n".format(ei, results[ei]["nSamples"], results[ei]["usedSamples"]))
 
-	fResults.close()
-	if expr_filter: fFilter.close()
+	fResults.close(), fFilter.close()
 
 if __name__ == '__main__':
 
-	version = "0.5.3"
+	version = "0.5.4"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
