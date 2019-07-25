@@ -313,6 +313,7 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
 		PSI = ( mean(A, B, C) / mean(A, B, C) + D) * 100
 	"""
 
+	import warnings
 	from multiprocessing import Pool
 
     # Read exitron info
@@ -334,19 +335,22 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
 		for ei in exitrons:
 			A, B, C, D = [ rc[ei][x] for x in ['A', 'B', 'C', 'D'] ]
 
-            # Classic PSI, based on the A, B, C values
-			try: classic_PSI = (np.mean([A, B, C]) / (np.mean([A, B, C]) + D)) * 100
-			except ZeroDivisionError: classis_PSI = 'nan'
+			with warnings.catch_warnings():
+				warnings.simplefilter("ignore", category=RuntimeWarning)
 
-            # New PSI, bsaed on the median coverage of the entire exitron
-			try: new_PSI = (np.median(rc[ei]['cov']) / (np.median(rc[ei]['cov']) + D)) * 100
-			except ZeroDivisonError: new_PSI = 'nan'
+	            # Classic PSI, based on the A, B, C values
+				try: classic_PSI = (np.mean([A, B, C]) / (np.mean([A, B, C]) + D)) * 100
+				except ZeroDivisionError: classis_PSI = 'nan'
 
-			rs, rb = quality_score(A, B, C, D, rc[ei]['cov'])
-			fout.write( "{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{}\t{}\t{}\t{}\t{}\t{}\t{}/{:.0f}/{:.0f}/{}\n".format(ei, info[ei]["t_id"], info[ei]["gene_id"], info[ei]["gene_name"], info[ei]["EI_len"], info[ei]["EIx3"],
-				classic_PSI, new_PSI, rs, rb,
-				A, B, C, D,
-				min(rc[ei]['cov']), np.mean(rc[ei]['cov']), np.median(rc[ei]['cov']), max(rc[ei]['cov'])))
+	            # New PSI, bsaed on the median coverage of the entire exitron
+				try: new_PSI = (np.median(rc[ei]['cov']) / (np.median(rc[ei]['cov']) + D)) * 100
+				except ZeroDivisonError: new_PSI = 'nan'
+
+				rs, rb = quality_score(A, B, C, D, rc[ei]['cov'])
+				fout.write( "{}\t{}\t{}\t{}\t{}\t{}\t{:.3f}\t{:.3f}\t{}\t{}\t{}\t{}\t{}\t{}\t{}/{:.0f}/{:.0f}/{}\n".format(ei, info[ei]["t_id"], info[ei]["gene_id"], info[ei]["gene_name"], info[ei]["EI_len"], info[ei]["EIx3"],
+					classic_PSI, new_PSI, rs, rb,
+					A, B, C, D,
+					min(rc[ei]['cov']), np.mean(rc[ei]['cov']), np.median(rc[ei]['cov']), max(rc[ei]['cov'])))
 
 def calculate_multi_PSI(work_dir, samples_file, exitrons_info, bam_dir, NPROC):
 	""" Loop through the samples in the samples file and
