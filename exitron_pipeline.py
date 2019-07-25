@@ -59,12 +59,12 @@ def get_shared_junctions(group_junctions, min_count=3, min_coverage=3, min_total
 	# and >= min_total_coverage
 	return set([ x for x in jN if jN[x]['N'] >= min_count and jN[x]['total_cov'] >= min_total_coverage ])
 
-def identify_exitrons(work_dir, gtf_file, samples_file, junction_filename="SJ.out.tab", min_count=3, min_coverage=3, min_total_coverage=1):
+def identify_exitrons(work_dir, gtf_file, samples_file, junction_filename="SJ.out.tab", min_count=3, min_coverage=3, min_total_coverage=1, expr_filter=False, min_TPM=1, gene_TPM_file="quant.genes.sf"):
 	""" Intersect the shared junctions with the min_count occurences per
 	sample group with the CDS GTF annotion. """
 
 	# Parse the samples per group
-	groups = {}
+	groups, TPM = {}, {}
 	for line in open(samples_file):
 		if not line.startswith('#'):
 			group_id, path, sample_id = line.rstrip().split('\t')[:3]
@@ -72,6 +72,10 @@ def identify_exitrons(work_dir, gtf_file, samples_file, junction_filename="SJ.ou
 
 			try: groups[group_id][sample_id] = { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["uniq_reads"] for j in yield_junctions(junction_file) }
 			except KeyError: groups[group_id] = { sample_id: { "{}:{}-{}:{}".format(j["chr"], j["junc_start"], j["junc_end"], j["strand"]): j["uniq_reads"] for j in yield_junctions(junction_file) } }
+
+			if expr_filter:
+				try: TPM[group_id][sample_id] = parse_gene_TPM(path+gene_TPM_file)
+				except KeyError: TPM[group_id] = { sample_id: parse_gene_TPM(path+gene_TPM_file) }
 
 	# Get all junctions with at least min_count occurences per group
 	all_junctions = set.union(*[ get_shared_junctions([ groups[x][y] for y in groups[x] ], min_count, min_coverage, min_total_coverage) for x in groups ])
@@ -110,22 +114,36 @@ def identify_exitrons(work_dir, gtf_file, samples_file, junction_filename="SJ.ou
 			EIx3 = "yes" if EI_len % 3 == 0 else "no"
 			exitron_id = "{}:{}-{}:{}".format(j_chr, j_start, j_end, j_strand)
 
-			# Get the SJ counts per sample
-			if not exitron_id in seen:
-				infoOut.write( "{}\t{}\t{}\t{}\t{}\t{}\n".format(exitron_id, attr["transcript_id"], attr["gene_id"], attr["gene_name"], EI_len, EIx3) )
-				bedOut.write( "{}\t{}\t{}\t{}\t1000\t{}\n".format(j_chr, j_start, j_end, exitron_id, j_strand) )
-				eceOut.write( "{}\t{}\t{}\t{}\t1000\t{}\n".format(j_chr, cds_start, cds_end, exitron_id, j_strand) )
-
-				labels, SJ_counts = [], []
+			survived = True
+			# Filter the junctions on those only originating from
+			# the genes with a TPM >= 1
+			if expr_filter:
+				checks = []
 				for g in natsorted(groups):
-					x = [ groups[g][r][exitron_id] if exitron_id in groups[g][r] else float('nan') for r in natsorted(groups[g]) ]
-					SJ_counts.append( '\t'.join([ str(y) for y in x ]) )
+					jc = np.array([ groups[g][r][exitron_id] if exitron_id in groups[g][r] else float('nan') for r in natsorted(groups[g]) ])
+					expr = np.array([ TPM[g][r][attr["gene_id"]] for r in natsorted(groups[g]) ])
+					fltr = np.array([ z for z in map( lambda x, y: (not np.isnan(x)) & (y >= min_TPM), jc, expr ) ])
+					checks.append(sum([ x > 0 for x in jc[fltr] ]) >= min_count and np.nansum(jc[fltr]) >= min_total_coverage )
+				survived = any(checks)
 
-					if sum([ y >= 0 for y in x ]) >= min_count:
-						labels.append( g )
+			if survived:
 
-				jcOut.write( "{}\t{}\t{}\n".format(exitron_id, ';'.join(labels), '\t'.join(SJ_counts) ) )
-				seen.add(exitron_id)
+				# Get the SJ counts per sample
+				if not exitron_id in seen:
+					infoOut.write( "{}\t{}\t{}\t{}\t{}\t{}\n".format(exitron_id, attr["transcript_id"], attr["gene_id"], attr["gene_name"], EI_len, EIx3) )
+					bedOut.write( "{}\t{}\t{}\t{}\t1000\t{}\n".format(j_chr, j_start, j_end, exitron_id, j_strand) )
+					eceOut.write( "{}\t{}\t{}\t{}\t1000\t{}\n".format(j_chr, cds_start, cds_end, exitron_id, j_strand) )
+
+					labels, SJ_counts = [], []
+					for g in natsorted(groups):
+						x = [ groups[g][r][exitron_id] if exitron_id in groups[g][r] else float('nan') for r in natsorted(groups[g]) ]
+						SJ_counts.append( '\t'.join([ str(y) for y in x ]) )
+
+						if sum([ y >= 0 for y in x ]) >= min_count:
+							labels.append( g )
+
+					jcOut.write( "{}\t{}\t{}\n".format(exitron_id, ';'.join(labels), '\t'.join(SJ_counts) ) )
+					seen.add(exitron_id)
 
 	infoOut.close(), bedOut.close(), eceOut.close()
 
@@ -574,7 +592,7 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 
 if __name__ == '__main__':
 
-	version = "0.5.4"
+	version = "0.5.5"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
@@ -589,6 +607,9 @@ if __name__ == '__main__':
 	parser_a.add_argument('--min-count', type=int, default=3, help="Minimum number of replicates a junction needs to occur in per group.")
 	parser_a.add_argument('--min-coverage', type=int, default=1, help="Minimum junction coverage in a single replicate.")
 	parser_a.add_argument('--min-total-coverage', type=int, default=1, help="Minimum junction coverage taken over all replicates of a group.")
+	parser_a.add_argument('--expr-filter', action='store_true', help="Filter based on minimum gene TPM. It's assumed that the gene expression file is located in the path directory specified in the samples file.")
+	parser_a.add_argument('--min-TPM', type=float, default=1, help="Minimum gene TPM cut-off.")
+	parser_a.add_argument('--gene-TPM-file', default="quant.genes.sf", help="Name of the Salmon per gene TPM quantification file.")
 
 	# Prepare bam files for PSI calculation
 	parser_b = subparsers.add_parser('prepare-bam', help="Extract the unique reads required for the PSI calculation.")
@@ -637,7 +658,7 @@ if __name__ == '__main__':
 
 	# Identify exitrons
 	if args.command == "identify-exitrons":
-		identify_exitrons(work_dir, args.gtf, args.samples, args.junction_filename, args.min_count, args.min_coverage, args.min_total_coverage)
+		identify_exitrons(work_dir, args.gtf, args.samples, args.junction_filename, args.min_count, args.min_coverage, args.min_total_coverage, args.expr_filter, args.min_TPM, args.gene_TPM_file)
 		log_settings(work_dir, args, 'w')
 
 	elif args.command == "prepare-bam":
