@@ -132,7 +132,7 @@ def identify_exitrons(work_dir, gtf_file, samples_file, junction_filename="SJ.ou
 				if not exitron_id in seen:
 					infoOut.write( "{}\t{}\t{}\t{}\t{}\t{}\n".format(exitron_id, attr["transcript_id"], attr["gene_id"], attr["gene_name"], EI_len, EIx3) )
 					bedOut.write( "{}\t{}\t{}\t{}\t1000\t{}\n".format(j_chr, j_start, j_end, exitron_id, j_strand) )
-					eceOut.write( "{}\t{}\t{}\t{}\t1000\t{}\n".format(j_chr, cds_start, cds_end, exitron_id, j_strand) )
+					eceOut.write( "{}\t{}\t{}\t{};{}\t1000\t{}\n".format(j_chr, cds_start, cds_end, attr["gene_id"], exitron_id, j_strand) )
 
 					labels, SJ_counts = [], []
 					for g in natsorted(groups):
@@ -177,11 +177,17 @@ def quality_score(A, B, C, D, cov):
 	from statsmodels.stats.proportion import binom_test
 
 	# Score based on the minimum exitron / junction coverage
-	if min(cov) >= 100 or D >= 100: RS = ">=100"
-	elif min(cov) >= 50 or D >= 50: RS = ">=50"
-	elif min(cov) >= 20 or D >= 20: RS = ">=20"
-	elif min(cov) >= 10 or D >= 10: RS = ">=10"
+	if all([ A >= 100, B >= 100, C >= 100 ]) or D >= 100: RS = ">=100"
+	elif all([ A >= 50, B >= 50, C >= 50 ]) or D >= 50: RS = ">=50"
+	elif all([ A >= 20, B >= 20, C >= 20 ]) or D >= 20: RS = ">=20"
+	elif all([ A >= 10, B >= 10, C >= 10 ]) or D >= 10: RS = ">=10"
 	else: RS = "<10"
+
+	#if min(cov) >= 100 or D >= 100: RS = ">=100"
+	#elif min(cov) >= 50 or D >= 50: RS = ">=50"
+	#elif min(cov) >= 20 or D >= 20: RS = ">=20"
+	#elif min(cov) >= 10 or D >= 10: RS = ">=10"
+	#else: RS = "<10"
 
 	'''
 		Filter exitron events based on (median) read coverage and read balance.
@@ -378,8 +384,10 @@ def parse_PSI(f):
 				'gene_name': cols[3],
 				'EI_len': cols[4],
 				'EIx3': cols[5],
-				'classic_PSI': float(cols[6]),
-				'new_PSI': float(cols[7]),
+				#'classic_PSI': float(cols[6]),
+				#'new_PSI': float(cols[7]),
+				'classic_PSI': float(cols[6]) if all([ cols[8] != "<10", cols[9] == "OKAY" ]) else float('nan'),
+				'new_PSI': float(cols[7]) if all([ cols[8] != "<10", cols[9] == "OKAY" ]) else float('nan'),
 				'RS': cols[8],
 				'RB': cols[9]
 			}
@@ -398,25 +406,25 @@ def parse_gene_TPM(f):
 
 def permutation_test(control, test, statistic="mean", nperm=10000):
 
-    n = len(control)
+	n = len(control)
 
-    # Calculate the test statistic for the observed data
-    if statistic == "t.test": obs = stats.ttest_ind(control, test)[0]
-    elif statistic == "mean": obs = np.mean(test) - np.mean(control)
-    elif statistic == "median": obs = np.median(test) - np.median(control)
+	# Calculate the test statistic for the observed data
+	if statistic == "t.test": obs = stats.ttest_ind(control, test)[0]
+	elif statistic == "mean": obs = np.mean(test) - np.mean(control)
+	elif statistic == "median": obs = np.median(test) - np.median(control)
 
-    # Calculate the test statistic based on the random data
-    rndm_obs, val = [], control + test
-    for i in range(nperm):
-        random.shuffle(val)
-        if statistic == "t.test": rndm_obs.append(stats.ttest_ind(val[:n], val[n:])[0])
-        elif statistic == "mean": rndm_obs.append( np.mean(val[:n]) - np.mean(val[n:]) )
-        elif statistic == "median": rndm_obs.append( np.median(val[:n]) - np.median(val[n:]) )
+	# Calculate the test statistic based on the random data
+	rndm_obs, val = [], control + test
+	for i in range(nperm):
+		random.shuffle(val)
+		if statistic == "t.test": rndm_obs.append(stats.ttest_ind(val[:n], val[n:])[0])
+		elif statistic == "mean": rndm_obs.append( np.mean(val[:n]) - np.mean(val[n:]) )
+		elif statistic == "median": rndm_obs.append( np.median(val[:n]) - np.median(val[n:]) )
 
-    # Check the number of times the random test statistic
-    # was equal or greater than the observed statistic
-    k = sum([ abs(r) >= abs(obs) for r in rndm_obs ])
-    return k / nperm
+	# Check the number of times the random test statistic
+	# was equal or greater than the observed statistic
+	k = sum([ abs(r) >= abs(obs) for r in rndm_obs ])
+	return k / nperm
 
 def paired_permutation_test(control, test, statistic="mean", nperm=10000):
 
@@ -550,16 +558,19 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 				else:
 					rFltr = np.array([ not np.isnan(x) for x in rPSI ])
 					tFltr = np.array([ not np.isnan(x) for x in tPSI ])
-					rPSI = rPSI[rFltr], tPSI[tFltr]
+					rPSI, tPSI = rPSI[rFltr], tPSI[tFltr]
 
 					usedSamples = '{};{}'.format(','.join(refNames[rFltr]), ','.join(tstNames[tFltr]))
 					nSamples = '{};{}'.format(sum(rFltr), sum(tFltr))
 
 			# Significance testing
+			if len(rPSI) and len(tPSI): pvalue = paired_permutation_test(rPSI, tPSI, statistic, nperm) if paired else permutation_test(rPSI, tPSI, statistic, nperm)
+			else: pvalue = float('NaN')
+
 			results[ei] = {
 				'nSamples': nSamples,
 				'usedSamples': usedSamples,
-				'p-value': paired_permutation_test(rPSI, tPSI, statistic, nperm) if paired else monte_carlo_permutation_test(rPSI, tPSI, statistic, nperm),
+				'p-value': pvalue,
 				'meanRefPSI': np.nanmean(rPSI),
 				'meanTstPSI': np.nanmean(tPSI),
 				'dPSI': np.nanmean(tPSI) - np.nanmean(rPSI)
@@ -675,7 +686,7 @@ if __name__ == '__main__':
 
 	elif args.command == "calculate-PSI":
 		if all([ os.path.exists(args.exitrons_info), os.path.exists(args.uniq) ]):
-			calculate_PSI(work_dir, args.exitrons_info, args.uniq, args.file_handle)
+			calculate_PSI(work_dir, args.exitrons_info, args.uniq, args.file_handle, args.NPROC)
 			log_settings(work_dir, args, 'a')
 		else:
 			sys.stderr.write("One (or multiple) input files could not be found.")
