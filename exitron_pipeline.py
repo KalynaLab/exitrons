@@ -369,10 +369,10 @@ def calculate_multi_PSI(work_dir, samples_file, exitrons_info, bam_dir, NPROC):
 			uniq = "{}uniq.{}.bam".format(bam_dir, sample_id)
 			calculate_PSI(work_dir, exitrons_info, uniq, sample_id, NPROC)
 
-def parse_PSI(f):
-	""" Parse the PSI values. If an exitron's read score and
-	read balance are not in the readScore or readBalance arrays,
-	the PSI value will be parsed as nan. """
+def parse_PSI(f, strict=True):
+	""" Parse the PSI values. If the strict variable is True,
+	the PSI value of an exitron will be set to NaN if the read
+	balance is NOT_OKAY or the read score equals <=10 """
 
 	psi = {}
 	for line in open(f):
@@ -384,13 +384,17 @@ def parse_PSI(f):
 				'gene_name': cols[3],
 				'EI_len': cols[4],
 				'EIx3': cols[5],
-				#'classic_PSI': float(cols[6]),
-				#'new_PSI': float(cols[7]),
-				'classic_PSI': float(cols[6]) if all([ cols[8] != "<10", cols[9] == "OKAY" ]) else float('nan'),
-				'new_PSI': float(cols[7]) if all([ cols[8] != "<10", cols[9] == "OKAY" ]) else float('nan'),
+				'classic_PSI': float(cols[6]),
+				'new_PSI': float(cols[7]),
 				'RS': cols[8],
 				'RB': cols[9]
 			}
+
+			# Apply filters, if desired
+			if strict and any([cols[8] == "<10", cols[9] == "NOT_OKAY"]):
+				psi[cols[0]]["classic_PSI"] = float("nan")
+				psi[cols[0]]["new_PSI"] = float("nan")
+
 	return psi
 
 def parse_gene_TPM(f):
@@ -460,7 +464,7 @@ def printProgressBar(iteration, total, prefix="Progress:", suffix="", decimals=1
 	if iteration == total:
 		print()
 
-def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_name, paired=True, min_TPM=1, expr_filter=False, gene_TPM_file=None, use_PSI="classic_PSI", statistic="mean", nperm=10000):
+def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_name, paired=True, min_TPM=1, expr_filter=False, gene_TPM_file=None, use_PSI="classic_PSI", statistic="mean", nperm=10000, strict=False):
 
 	import warnings
 
@@ -488,8 +492,8 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 		test = [ tmp[test_name][x] for x in tmp[test_name] ]
 
 	# Get the PSI values
-	refPSI = [ parse_PSI(psi_dir+r["sample_id"]+".psi") for r in reference ]
-	tstPSI = [ parse_PSI(psi_dir+t["sample_id"]+".psi") for t in test ]
+	refPSI = [ parse_PSI(psi_dir+r["sample_id"]+".psi", strict) for r in reference ]
+	tstPSI = [ parse_PSI(psi_dir+t["sample_id"]+".psi", strict) for t in test ]
 
 	# Parse the gene TPM
 	if expr_filter:
@@ -607,7 +611,7 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 
 if __name__ == '__main__':
 
-	version = "0.5.5"
+	version = "0.5.6"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
@@ -664,6 +668,7 @@ if __name__ == '__main__':
 	parser_f.add_argument('--use-PSI', choices=["classic", "new"], default="classic", help="Choose which PSI to use.")
 	parser_f.add_argument('--statistic', default="mean", choices=["mean", "median", "t.test"], help="Test statistic to use for the permutation test.")
 	parser_f.add_argument('--nperm', type=int, default=10000, help="Number of permutations to run.")
+	parser_f.add_argument('--strict', action='store_true', help="Strictly filter the PSI values")
 
 	args = parser.parse_args()
 
@@ -696,5 +701,5 @@ if __name__ == '__main__':
 		log_settings(work_dir, args, 'a')
 
 	elif args.command == "compare":
-		compare(work_dir, args.samples, add_slash(args.psi_dir), args.file_handle, args.reference, args.test, args.paired, args.min_TPM, args.expr_filter, args.gene_TPM_file, args.use_PSI, args.statistic, args.nperm)
+		compare(work_dir, args.samples, add_slash(args.psi_dir), args.file_handle, args.reference, args.test, args.paired, args.min_TPM, args.expr_filter, args.gene_TPM_file, args.use_PSI, args.statistic, args.nperm, args.strict)
 		log_settings(work_dir, args, 'a')
