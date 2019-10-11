@@ -139,7 +139,7 @@ def identify_exitrons(work_dir, gtf_file, samples_file, junction_filename="SJ.ou
 						x = [ groups[g][r][exitron_id] if exitron_id in groups[g][r] else float('nan') for r in natsorted(groups[g]) ]
 						SJ_counts.append( '\t'.join([ str(y) for y in x ]) )
 
-						if sum([ y >= 0 for y in x ]) >= min_count:
+						if sum([ y >= min_coverage for y in x ]) >= min_count:
 							labels.append( g )
 
 					jcOut.write( "{}\t{}\t{}\n".format(exitron_id, ';'.join(labels), '\t'.join(SJ_counts) ) )
@@ -611,7 +611,7 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 
 if __name__ == '__main__':
 
-	version = "0.5.6"
+	version = "0.5.7"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
