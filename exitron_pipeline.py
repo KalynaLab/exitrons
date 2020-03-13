@@ -11,13 +11,15 @@ import numpy as np
 from subprocess import Popen, PIPE
 from natsort import natsorted
 from scipy import stats
+import matplotlib.pyplot as plt
+plt.style.use('seaborn-whitegrid')
 
 def add_slash(d):
 	return d if d.endswith('/') else d+'/'
 
 def log_settings(work_dir, args, write_mode='a'):
 
-	args_order = [ 'version', 'work_dir', 'command', 'gtf', 'samples', 'junction_filename', 'min_count', 'min_coverage', 'min_total_coverage', 'bam', 'file_handle', 'genome_fasta', 'bam_filename', 'NPROC', 'uniq', 'exitrons_info', 'bam_dir', 'reference', 'test', 'paired', 'min_TPM', 'expr_filter', 'gene_TPM_file', 'use_PSI' ]
+	args_order = [ 'version', 'work_dir', 'command', 'gtf', 'samples', 'junction_filename', 'min_count', 'min_coverage', 'min_total_coverage', 'bam', 'file_handle', 'genome_fasta', 'bam_filename', 'NPROC', 'uniq', 'exitrons_info', 'bam_dir', 'reference', 'test', 'paired', 'min_TPM', 'expr_filter', 'gene_TPM_file', 'use_PSI', 'strict' ]
 	with open(work_dir+"Log.out", write_mode) as fout:
 		fout.write(time.asctime( time.localtime(time.time()) )+'\n')
 		for arg in args_order:
@@ -120,10 +122,12 @@ def identify_exitrons(work_dir, gtf_file, samples_file, junction_filename="SJ.ou
 			if expr_filter:
 				checks = []
 				for g in natsorted(groups):
-					jc = np.array([ groups[g][r][exitron_id] if exitron_id in groups[g][r] else float('nan') for r in natsorted(groups[g]) ])
-					expr = np.array([ TPM[g][r][attr["gene_id"]] for r in natsorted(groups[g]) ])
-					fltr = np.array([ z for z in map( lambda x, y: (not np.isnan(x)) & (y >= min_TPM), jc, expr ) ])
-					checks.append(sum([ x > 0 for x in jc[fltr] ]) >= min_count and np.nansum(jc[fltr]) >= min_total_coverage )
+					try:
+						jc = np.array([ groups[g][r][exitron_id] if exitron_id in groups[g][r] else float('nan') for r in natsorted(groups[g]) ])
+						expr = np.array([ TPM[g][r][attr["gene_id"]] for r in natsorted(groups[g]) ])
+						fltr = np.array([ z for z in map( lambda x, y: (not np.isnan(x)) & (y >= min_TPM), jc, expr ) ])
+						checks.append(sum([ x > 0 for x in jc[fltr] ]) >= min_count and np.nansum(jc[fltr]) >= min_total_coverage )
+					except KeyError: pass
 				survived = any(checks)
 
 			if survived:
@@ -195,7 +199,7 @@ def quality_score(A, B, C, D, cov):
 		high imbalance in read counts among the two exon-intron junctions and the intron
 		body sequence. Such imbalances can arise from neighboring alternative 5' and/or 3'
 		splice sites or overlapping genes, confound PSI estimates, and lead to the false
-		detection of exitrons.
+		detection of exitrons (Braunschweig et al., 2014).
 
 		p-value (binomial{ 	M = min(A, B, C),
 							N = min(A, B, C) + max(A, B, C),
@@ -391,7 +395,8 @@ def parse_PSI(f, strict=True):
 			}
 
 			# Apply filters, if desired
-			if strict and any([cols[8] == "<10", cols[9] == "NOT_OKAY"]):
+			#if strict and any([cols[8] == "<10", cols[9] == "NOT_OKAY"]):
+			if strict and "<10" in line:
 				psi[cols[0]]["classic_PSI"] = float("nan")
 				psi[cols[0]]["new_PSI"] = float("nan")
 
@@ -418,9 +423,10 @@ def permutation_test(control, test, statistic="mean", nperm=10000):
 	elif statistic == "median": obs = np.median(test) - np.median(control)
 
 	# Calculate the test statistic based on the random data
-	rndm_obs, val = [], control + test
+	#rndm_obs, val = [], control + test
+	rndm_obs, val = [], np.concatenate((control, test))
 	for i in range(nperm):
-		random.shuffle(val)
+		np.random.shuffle(val)
 		if statistic == "t.test": rndm_obs.append(stats.ttest_ind(val[:n], val[n:])[0])
 		elif statistic == "mean": rndm_obs.append( np.mean(val[:n]) - np.mean(val[n:]) )
 		elif statistic == "median": rndm_obs.append( np.median(val[:n]) - np.median(val[n:]) )
@@ -467,6 +473,9 @@ def printProgressBar(iteration, total, prefix="Progress:", suffix="", decimals=1
 def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_name, paired=True, min_TPM=1, expr_filter=False, gene_TPM_file=None, use_PSI="classic_PSI", statistic="mean", nperm=10000, strict=False):
 
 	import warnings
+
+	plot_dir = work_dir+"plots/"
+	if not os.path.exists(plot_dir): os.makedirs(plot_dir)
 
 	# Parse the samples
 	tmp, pairs, reference, test = { reference_name: {}, test_name: {} }, {}, [], []
@@ -581,6 +590,25 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 			}
 			results[ei]['p-value'] = results[ei]['p-value'] if results[ei]['nSamples'] else float('nan')
 
+			# Plot if p-value < 0.05
+			if results[ei]['p-value'] < 0.05:
+
+				markers = usedSamples.split(',')
+				plt.figure(figsize=(3,8))
+				plt.suptitle(refPSI[0][ei]["gene_name"]+'\n'+ei, fontsize=10)
+				plt.ylim(0, 105)
+				plt.xticks([0,1], ['normal', 'tumor'])
+
+				for z, nt in enumerate(zip(rPSI, tPSI)):
+					plt.scatter(0, nt[0], c='#fe4a49', marker=r'${}$'.format(markers[z]))
+					plt.scatter(1, nt[1], c='#2ab7ca', marker=r'${}$'.format(markers[z]))
+
+				for z in range(len(rPSI)):
+					plt.plot([0.025, 0.975], [rPSI[z], tPSI[z]], c='#cccccc', linestyle='--', linewidth=1)
+
+				plt.savefig("{}{}_{}.png".format(plot_dir, refPSI[0][ei]["gene_name"], ei))
+				plt.close()
+
 			# Output progress bar
 			printProgressBar(i+1, N)
 
@@ -611,7 +639,7 @@ def compare(work_dir, samples_file, psi_dir, file_handle, reference_name, test_n
 
 if __name__ == '__main__':
 
-	version = "0.5.7"
+	version = "0.5.9"
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument('-v', '--version', action='version', version=version, default=version)
 	parser.add_argument('-w', '--work-dir', default="./", help="Output working directory.")
@@ -703,3 +731,11 @@ if __name__ == '__main__':
 	elif args.command == "compare":
 		compare(work_dir, args.samples, add_slash(args.psi_dir), args.file_handle, args.reference, args.test, args.paired, args.min_TPM, args.expr_filter, args.gene_TPM_file, args.use_PSI, args.statistic, args.nperm, args.strict)
 		log_settings(work_dir, args, 'a')
+
+# Fixes for 0.5.8
+# * Numpy array concatenation was broken for the permutation test
+
+# Fixes for 0.5.9
+# * Added missing gene_id exception in the expr-filter for exitron discovery
+# * Changed compare --strict limits to only pertain to the coverage and not the read balance
+# * Added connected dotplots for the events with a p-value below 0.05
