@@ -267,38 +267,39 @@ def get_exitron_coverage(exitron_id, uniq_bam):
 	A, B, C, D = 0, 0, 0, 0
 	EICov = { str(x): 0 for x in range(s, e) } # Exitron per position coverage
 	for aln in stdout.split('\n'):
-		try:
-			pos = int(aln.split('\t')[3])
-			cigar = aln.split('\t')[5]
+		if "NH:i:1" in aln:
+			try:
+				pos = int(aln.split('\t')[3])
+				cigar = aln.split('\t')[5]
 
-            # Go through the read alignment based on the cigar
-			current_pos = pos
-			for m in re.finditer('(\d+)(\w)', cigar):
-				alnLen, alnOperator = m.groups()
-				if alnOperator in ['M', 'X', '=']:
+	            # Go through the read alignment based on the cigar
+				current_pos = pos
+				for m in re.finditer('(\d+)(\w)', cigar):
+					alnLen, alnOperator = m.groups()
+					if alnOperator in ['M', 'X', '=']:
 
-					alnRange = set(range(current_pos, (current_pos + int(alnLen))))
-					current_pos += int(alnLen)
+						alnRange = set(range(current_pos, (current_pos + int(alnLen))))
+						current_pos += int(alnLen)
 
-                    # Check if a read fully coverage A, B, and/or class C
-					if ARange <= alnRange: A += 1
-					if BRange <= alnRange: B += 1
-					if CRange <= alnRange: C += 1
+	                    # Check if a read fully coverage A, B, and/or class C
+						if ARange <= alnRange: A += 1
+						if BRange <= alnRange: B += 1
+						if CRange <= alnRange: C += 1
 
-                    # Track the exitron per base coverage
-					for x in alnRange:
-						if str(x) in EICov:
-							EICov[str(x)] += 1
+	                    # Track the exitron per base coverage
+						for x in alnRange:
+							if str(x) in EICov:
+								EICov[str(x)] += 1
 
-				elif alnOperator in ['N', 'D']:
-					if current_pos == s and alnLen+alnOperator == N:
-						D += 1
-					current_pos += int(alnLen)
+					elif alnOperator in ['N', 'D']:
+						if current_pos == s and alnLen+alnOperator == N:
+							D += 1
+						current_pos += int(alnLen)
 
-				else:
-					pass
-		except IndexError: # Skip the empty lines appended to the stdout
-			pass
+					else:
+						pass
+			except IndexError: # Skip the empty lines appended to the stdout
+				pass
 
 	return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
 
