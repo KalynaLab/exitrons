@@ -287,7 +287,7 @@ def get_exitron_coverage(exitron_id, bam_file, quant_mode, nth, N):
 
 class Counter(object):
 	def __init__(self, initval=0):
-		self.val = multiprocessing.RawValue('i', initval)
+		self.val = multiprocessing.Value('i', initval)
 		self.lock = multiprocessing.Lock()
 
 	def increment(self, n=1):
@@ -337,7 +337,7 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 			info[exitron_id] = { 't_id': t_id, 'gene_id': gene_id, 'gene_name': gene_name, 'EI_len': EI_len, 'EIx3': EIx3 }
 	exitrons = [ x for x in natsorted(info) ]
 
-	nth, N = Counter(), len(exitrons)
+	nth, N = Counter(0), len(exitrons)
 	printProgressBar(nth.value(), N)
 
     # Collect coverage data into a dictionary
@@ -345,7 +345,7 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 	with Pool(processes=NPROC) as p:
 		rc = dict(zip(exitrons, p.starmap(get_exitron_coverage, job_args)))
 
-	printProgressBar(nth, N)
+	printProgressBar(nth.value(), N)
 
 
     # Calculate PSI and output
