@@ -699,7 +699,6 @@ if __name__ == '__main__':
 			sys.stderr.write("One (or multiple) input files could not be found.")
 
 	elif args.command == "calculate-multi-PSI":
-		#calculate_multi_PSI(work_dir, args.samples, args.exitrons_info, add_slash(args.bam_dir), args.NPROC)
 		calculate_multi_PSI(work_dir, args.samples, args.exitrons_info, args.quant_mode, args.bam_filename, args.NPROC)
 		log_settings(work_dir, args, 'a')
 
@@ -717,3 +716,4 @@ if __name__ == '__main__':
 
 # Changes for 0.6.0
 # * Moved away from the unique bam file creation and directly use the STAR output
+# * Added a janky progress bar for the PSI quantification
