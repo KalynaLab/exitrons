@@ -323,8 +323,9 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 			info[exitron_id] = { 't_id': t_id, 'gene_id': gene_id, 'gene_name': gene_name, 'EI_len': EI_len, 'EIx3': EIx3 }
 	exitrons = [ x for x in natsorted(info) ]
 
-	global nth = 1
-	global N_total = len(exitrons)
+	global nth
+	global N_total
+	nth, N_total = 1, len(exitrons)
 	printProgressBar(0, N_total)
 
     # Collect coverage data into a dictionary
@@ -333,6 +334,7 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 		rc = dict(zip(exitrons, p.starmap(get_exitron_coverage, job_args)))
 
 	printProgressBar(nth, N_total)
+	del nth, N_total
 
     # Calculate PSI and output
 	with open("{}{}.psi".format(work_dir, file_handle), 'w') as fout:
