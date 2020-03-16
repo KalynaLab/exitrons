@@ -19,7 +19,7 @@ def add_slash(d):
 
 def log_settings(work_dir, args, write_mode='a'):
 
-	args_order = [ 'version', 'work_dir', 'command', 'gtf', 'samples', 'junction_filename', 'min_count', 'min_coverage', 'min_total_coverage', 'bam', 'file_handle', 'genome_fasta', 'bam_filename', 'NPROC', 'uniq', 'exitrons_info', 'bam_dir', 'reference', 'test', 'paired', 'min_TPM', 'expr_filter', 'gene_TPM_file', 'use_PSI', 'strict' ]
+	args_order = [ 'version', 'work_dir', 'command', 'gtf', 'samples', 'junction_filename', 'min_count', 'min_coverage', 'min_total_coverage', 'bam', 'file_handle', 'genome_fasta', 'bam_filename', 'NPROC', 'quant_mode', 'exitrons_info', 'reference', 'test', 'paired', 'min_TPM', 'expr_filter', 'gene_TPM_file', 'use_PSI', 'strict' ]
 	with open(work_dir+"Log.out", write_mode) as fout:
 		fout.write(time.asctime( time.localtime(time.time()) )+'\n')
 		for arg in args_order:
@@ -200,7 +200,7 @@ def quality_score(A, B, C, D, cov):
 
 	return RS, balance
 
-def get_exitron_coverage(exitron_id, bam_file, quant_mode, i, N_total):
+def get_exitron_coverage(exitron_id, bam_file, quant_mode):
 
 	""" Count the coverage per position in the A, B, and C regions based
 		on the CIGAR signatures of the aligned reads.
@@ -279,11 +279,12 @@ def get_exitron_coverage(exitron_id, bam_file, quant_mode, i, N_total):
 			except IndexError: # Skip the empty lines appended to the stdout
 				pass
 
-	printProgressBar(i, N_total)
+	global nth, N_total
+	printProgressBar(nth, N_total)
+	nth += 1
 
 	return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
 
-#def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
 def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPROC):
 	""" Calculate exitron PSI values, based on the coverage of the
 		unique exonic reads.
@@ -323,15 +324,16 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 			info[exitron_id] = { 't_id': t_id, 'gene_id': gene_id, 'gene_name': gene_name, 'EI_len': EI_len, 'EIx3': EIx3 }
 	exitrons = [ x for x in natsorted(info) ]
 
-	N = len(exitrons)
-	printProgressBar(0, N)
+
+	nth, N_total = 1, len(exitrons)
+	printProgressBar(0, N_total)
 
     # Collect coverage data into a dictionary
-	job_args = [(x, bam_file, quant_mode, i, N) for i, x in enumerate(exitrons)]
+	job_args = [(x, bam_file, quant_mode) for x in exitrons]
 	with Pool(processes=NPROC) as p:
 		rc = dict(zip(exitrons, p.starmap(get_exitron_coverage, job_args)))
 
-	printProgressBar(N, N)
+	printProgressBar(nth, N_total)
 
     # Calculate PSI and output
 	with open("{}{}.psi".format(work_dir, file_handle), 'w') as fout:
@@ -416,7 +418,6 @@ def permutation_test(control, test, statistic="mean", nperm=10000):
 	elif statistic == "median": obs = np.median(test) - np.median(control)
 
 	# Calculate the test statistic based on the random data
-	#rndm_obs, val = [], control + test
 	rndm_obs, val = [], np.concatenate((control, test))
 	for i in range(nperm):
 		np.random.shuffle(val)
