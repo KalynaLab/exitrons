@@ -279,6 +279,8 @@ def get_exitron_coverage(exitron_id, bam_file, quant_mode):
 			except IndexError: # Skip the empty lines appended to the stdout
 				pass
 
+	global nth
+	global N_total
 	print(nth, N_total)
 	printProgressBar(nth, N_total)
 	nth += 1
