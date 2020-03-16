@@ -349,6 +349,7 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 	with Pool(processes=NPROC) as p:
 		rc = dict(zip(exitrons, p.starmap(get_exitron_coverage, job_args)))
 
+	printProgressBar(nth.value, N_total)
 	del nth, N_total
 
     # Calculate PSI and output
