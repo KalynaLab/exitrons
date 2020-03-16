@@ -281,7 +281,7 @@ def get_exitron_coverage(exitron_id, bam_file, quant_mode, nth, N):
 				pass
 
 	nth.increment()
-	printProgressBar(nth.value(), N_total)
+	printProgressBar(nth.value, N_total)
 
 	return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
 
@@ -338,14 +338,14 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 	exitrons = [ x for x in natsorted(info) ]
 
 	nth, N = Counter(0), len(exitrons)
-	printProgressBar(nth.value(), N)
+	printProgressBar(nth.value, N)
 
     # Collect coverage data into a dictionary
 	job_args = [(x, bam_file, quant_mode, nth, N) for x in exitrons]
 	with Pool(processes=NPROC) as p:
 		rc = dict(zip(exitrons, p.starmap(get_exitron_coverage, job_args)))
 
-	printProgressBar(nth.value(), N)
+	printProgressBar(nth.value, N)
 
 
     # Calculate PSI and output
