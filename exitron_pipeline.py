@@ -200,7 +200,7 @@ def quality_score(A, B, C, D, cov):
 
 	return RS, balance
 
-def get_exitron_coverage(exitron_id, bam_file, quant_mode):
+def get_exitron_coverage(exitron_id, bam_file, quant_mode, i, N):
 
 	""" Count the coverage per position in the A, B, and C regions based
 		on the CIGAR signatures of the aligned reads.
@@ -279,6 +279,8 @@ def get_exitron_coverage(exitron_id, bam_file, quant_mode):
 			except IndexError: # Skip the empty lines appended to the stdout
 				pass
 
+	printProgressBar(0, N)
+
 	return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
 
 #def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
@@ -321,15 +323,13 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 			info[exitron_id] = { 't_id': t_id, 'gene_id': gene_id, 'gene_name': gene_name, 'EI_len': EI_len, 'EIx3': EIx3 }
 	exitrons = [ x for x in natsorted(info) ]
 
-	i, N = 0, len(exitrons)
+	N = len(exitrons)
 	printProgressBar(0, N)
 
     # Collect coverage data into a dictionary
-	job_args = [(x, bam_file, quant_mode) for x in exitrons]
+	job_args = [(x, bam_file, quant_mode, i, N) for i, x in enumerate(exitrons)]
 	with Pool(processes=NPROC) as p:
 		rc = dict(zip(exitrons, p.starmap(get_exitron_coverage, job_args)))
-		i += NPROC
-		printProgressBar(i, N)
 
     # Calculate PSI and output
 	with open("{}{}.psi".format(work_dir, file_handle), 'w') as fout:
