@@ -318,6 +318,7 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 	"""
 
 	import warnings
+	import multiprocessing
 	from multiprocessing import Pool
 
 	# Make sure the BAM file is indexed
