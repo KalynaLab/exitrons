@@ -307,7 +307,10 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 	from multiprocessing import Pool
 
 	# Make sure the BAM file is indexed
-	assert any([ os.path.exists(bam_file.replace('bam', 'bai')), os.path.exists(bam_file+'.bai') ]),"BAM index file missing. Please run \"samtools index <bam_file>\" and try again."
+	try:
+		assert any([ os.path.exists(bam_file.replace('bam', 'bai')), os.path.exists(bam_file+'.bai') ]),"BAM index file missing. Please run \"samtools index <bam_file>\" and try again."
+	except AssertionError as err:
+		print(err)
 
     # Read exitron info
 	rc, info = {}, {}
