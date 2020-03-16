@@ -286,11 +286,12 @@ def get_exitron_coverage(exitron_id, bam_file, quant_mode, nth, N):
 	return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
 
 class Counter(object):
-	def __init__(self):
-		self.val = multiprocessing.Value('i', 0)
+    def __init__(self, initval=0):
+        self.val = multiprocessing.RawValue('i', initval)
+        self.lock = multiprocessing.Lock()
 
 	def increment(self, n=1):
-		with self.val.get_lock():
+		with self.lock:
 			self.val.value += n
 
 	@property
@@ -337,7 +338,7 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 	exitrons = [ x for x in natsorted(info) ]
 
 	nth, N = Counter(), len(exitrons)
-	printProgressBar(0, N)
+	printProgressBar(nth.value(), N)
 
     # Collect coverage data into a dictionary
 	job_args = [(x, bam_file, quant_mode, nth, N) for x in exitrons]
