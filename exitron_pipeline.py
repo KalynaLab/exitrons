@@ -281,8 +281,8 @@ def get_exitron_coverage(exitron_id, bam_file, quant_mode):
 
 	global nth
 	global N_total
+	nth = nth + 1
 	printProgressBar(nth, N_total)
-	nth += 1
 
 	return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
 
@@ -327,7 +327,7 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 
 	global nth
 	global N_total
-	nth, N_total = 1, len(exitrons)
+	nth, N_total = 0, len(exitrons)
 	printProgressBar(0, N_total)
 
     # Collect coverage data into a dictionary
