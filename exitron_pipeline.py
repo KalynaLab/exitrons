@@ -310,7 +310,7 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 
 	# Make sure the BAM file is indexed
 	try:
-		assert any([ os.path.exists(bam_file.replace('bam', 'bai')), os.path.exists(bam_file+'.bai') ]),"BAM index file missing. Please run \"samtools index <bam_file>\" and try again."
+		assert any([ os.path.exists(bam_file.replace('bam', 'bai')), os.path.exists(bam_file+'.bai') ]),"BAM index file for "+bam_file+" missing. Please run \"samtools index <bam_file>\" and try again."
 	except AssertionError as err:
 		print(err)
 		exit()
