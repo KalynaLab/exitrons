@@ -279,7 +279,6 @@ def get_exitron_coverage(exitron_id, bam_file, quant_mode):
 			except IndexError: # Skip the empty lines appended to the stdout
 				pass
 
-	global nth, N_total
 	printProgressBar(nth, N_total)
 	nth += 1
 
@@ -324,8 +323,8 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 			info[exitron_id] = { 't_id': t_id, 'gene_id': gene_id, 'gene_name': gene_name, 'EI_len': EI_len, 'EIx3': EIx3 }
 	exitrons = [ x for x in natsorted(info) ]
 
-
-	nth, N_total = 1, len(exitrons)
+	global nth = 1
+	global N_total = len(exitrons)
 	printProgressBar(0, N_total)
 
     # Collect coverage data into a dictionary
