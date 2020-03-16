@@ -153,28 +153,6 @@ def identify_exitrons(work_dir, gtf_file, samples_file, junction_filename="SJ.ou
 
 	subprocess.call("rm -f "+work_dir+"junctions_GTF_map.tmp", shell=True)
 
-def prepare_bam_files(work_dir, bam_file, file_handle, genome_fasta, NPROC=4):
-	""" Extract the unique reads and unique exonic reads from the
-	supplied bam file, index and output to the working directory. """
-
-	# Extract unique reads
-	uniq_bam = "{}uniq.{}.bam".format(work_dir, file_handle)
-	cmd = "samtools view -@ {0} {1} | grep -w \"NH:i:1\" | samtools view -@ {0} -bT {2} - | samtools sort -o {3} -".format(NPROC, bam_file, genome_fasta, uniq_bam)
-	subprocess.call(cmd, shell=True)
-
-	# Index bam
-	subprocess.call("samtools index {}".format(uniq_bam), shell=True)
-
-def prepare_multi_bam(work_dir, samples_file, genome_fasta, bam_filename, NPROC=4):
-	""" Loop through the samples in the file and
-	prepare the bam files. """
-
-	for line in open(samples_file):
-		if not line.startswith('#'):
-			group_id, path, sample_id = line.rstrip().split('\t')[:3]
-			print("Preparing {} BAM files. Started on {}".format(sample_id, time.asctime( time.localtime(time.time()) )))
-			prepare_bam_files(work_dir, path+bam_filename, sample_id, genome_fasta, NPROC)
-
 def quality_score(A, B, C, D, cov):
 	""" Score the exitron based on the number of reads """
 
@@ -222,7 +200,7 @@ def quality_score(A, B, C, D, cov):
 
 	return RS, balance
 
-def get_exitron_coverage(exitron_id, uniq_bam):
+def get_exitron_coverage(exitron_id, bam_file, quant_mode):
 
 	""" Count the coverage per position in the A, B, and C regions based
 		on the CIGAR signatures of the aligned reads.
@@ -261,13 +239,13 @@ def get_exitron_coverage(exitron_id, uniq_bam):
 	N = "{}N".format((e-s)+1)
 
     # Extract the exitron coverage from the unique reads bam file
-	process = Popen(["samtools", "view", uniq_bam, "{}:{}-{}".format(c, s-10, e+10)], stdout=PIPE, stderr=PIPE, universal_newlines=True)
+	process = Popen(["samtools", "view", bam_file, "{}:{}-{}".format(c, s-10, e+10)], stdout=PIPE, stderr=PIPE, universal_newlines=True)
 	stdout, stderr = process.communicate()
 
 	A, B, C, D = 0, 0, 0, 0
 	EICov = { str(x): 0 for x in range(s, e) } # Exitron per position coverage
 	for aln in stdout.split('\n'):
-		if "NH:i:1" in aln:
+		if any([ quant_mode == "multi", "NH:i:1" in aln ]):
 			try:
 				pos = int(aln.split('\t')[3])
 				cigar = aln.split('\t')[5]
@@ -303,7 +281,8 @@ def get_exitron_coverage(exitron_id, uniq_bam):
 
 	return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
 
-def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
+#def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
+def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPROC):
 	""" Calculate exitron PSI values, based on the coverage of the
 		unique exonic reads.
 
@@ -336,7 +315,7 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
 	exitrons = [ x for x in natsorted(info) ]
 
     # Collect coverage data into a dictionary
-	job_args = [(x, uniq_bam) for x in exitrons]
+	job_args = [(x, bam_file, quant_mode) for x in exitrons]
 	with Pool(processes=NPROC) as p:
 		rc = dict(zip(exitrons, p.starmap(get_exitron_coverage, job_args)))
 
@@ -363,7 +342,7 @@ def calculate_PSI(work_dir, exitron_info, uniq_bam, file_handle, NPROC):
 					A, B, C, D,
 					min(rc[ei]['cov']), np.mean(rc[ei]['cov']), np.median(rc[ei]['cov']), max(rc[ei]['cov'])))
 
-def calculate_multi_PSI(work_dir, samples_file, exitrons_info, bam_dir, NPROC):
+def calculate_multi_PSI(work_dir, samples_file, exitrons_info, quant_mode, bam_file, NPROC):
 	""" Loop through the samples in the samples file and
 	calculate the PSI for all exitrons for each sample. """
 
@@ -371,8 +350,7 @@ def calculate_multi_PSI(work_dir, samples_file, exitrons_info, bam_dir, NPROC):
 		if not line.startswith('#'):
 			group_id, path, sample_id = line.rstrip().split('\t')[:3]
 			print("Calculating {} PSIs. Started on {}".format(sample_id, time.asctime( time.localtime(time.time()) )))
-			uniq = "{}uniq.{}.bam".format(bam_dir, sample_id)
-			calculate_PSI(work_dir, exitrons_info, uniq, sample_id, NPROC)
+			calculate_PSI(work_dir, exitrons_info, quant_mode, path+bam_file, sample_id, NPROC)
 
 def parse_PSI(f, strict=True):
 	""" Parse the PSI values. If the strict variable is True,
@@ -659,29 +637,18 @@ if __name__ == '__main__':
 	parser_a.add_argument('--min-TPM', type=float, default=1, help="Minimum gene TPM cut-off.")
 	parser_a.add_argument('--gene-TPM-file', default="quant.genes.sf", help="Name of the Salmon per gene TPM quantification file.")
 
-	# Prepare bam files for PSI calculation
-	parser_b = subparsers.add_parser('prepare-bam', help="Extract the unique reads required for the PSI calculation.")
-	parser_b.add_argument('-b', '--bam', required=True, help="BAM alignment file.")
-	parser_b.add_argument('-f', '--file-handle', required=True, help="Unique file handle. The output files will be [work_dir]/uniq.[file-handle].bam.")
-	parser_b.add_argument('-g', '--genome-fasta', required=True, help="Genome fasta corresponding to the one used for the BAM file creation.")
-	parser_b.add_argument('--NPROC', type=int, default=4, choices=[i for i in range(os.cpu_count()+1)], help="Number of processes to use when running samtools.")
-
-	parser_c = subparsers.add_parser('prepare-multi-bam', help="Prepare BAM files for all samples in the samples.txt file.")
-	parser_c.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
-	parser_c.add_argument('-g', '--genome-fasta', required=True, help="Genome fasta corresponding to the one used for the BAM file creation.")
-	parser_c.add_argument('--bam-filename', default="Aligned.sortedByCoord.out.bam", help="BAM filename (not path). Assumes that all BAM files have the same name, but different paths.")
-	parser_c.add_argument('--NPROC', type=int, default=4, choices=[i for i in range(os.cpu_count()+1)], help="Number of processes to use when running samtools.")
-
 	parser_d = subparsers.add_parser('calculate-PSI', help="Calculate the exitron PSI.")
 	parser_d.add_argument('--exitrons-info', required=True, help="exitrons.info file (from identify-exitrons).")
-	parser_d.add_argument('--uniq', required=True, help="Unique reads BAM file (from prepare-bam).")
+	parser_d.add_argument('--quant-mode', default="unique", choices=["unique", "multi"], help="Quantify the exitrons based on unique reads (denoted by the NH:i:1 flag), or multimapping reads.")
+	parser_d.add_argument('--bam', required=True, help="Mapped reads BAM file. This file requieres an index to be present in the same folder!")
 	parser_d.add_argument('--file-handle', required=True, help="Output file handle. File name will be <file_handle>.psi.")
 	parser_d.add_argument('--NPROC', type=int, default=os.cpu_count(), choices=[i for i in range(1, os.cpu_count()+1)], help="Number of parallel processes to use.")
 
 	parser_e = subparsers.add_parser('calculate-multi-PSI', help="Calculate PSI for all samples in the samples.txt file.")
-	parser_e.add_argument('--bam-dir', required=True, help="Path to the prepared bam files (from prepare-bam).")
-	parser_e.add_argument('--exitrons-info', required=True, help="exitrons.info file (from identify-exitrons).")
 	parser_e.add_argument('--samples', required=True, help="Tab-separated file containing the group id (e.g. wt), absolute path to the folder containing the mapping bam and junction files, and sample id (e.g. wt-1).")
+	parser_e.add_argument('--exitrons-info', required=True, help="exitrons.info file (from identify-exitrons).")
+	parser_e.add_argument('--quant-mode', default="unique", choices=["unique", "multi"], help="Quantify the exitrons based on unique reads (denoted by the NH:i:1 flag), or multimapping reads.")
+	parser_e.add_argument('--bam-filename', default="Aligned.sortedByCoord.out.bam", help="BAM filename (not path). Assumes that all BAM files have the same name, but different paths.")
 	parser_e.add_argument('--NPROC', type=int, default=os.cpu_count(), choices=[i for i in range(1, os.cpu_count()+1)], help="Number of parallel processes to use.")
 
 	parser_f = subparsers.add_parser('compare', help="Compare exitrons of two groups.")
@@ -710,23 +677,16 @@ if __name__ == '__main__':
 		identify_exitrons(work_dir, args.gtf, args.samples, args.junction_filename, args.min_count, args.min_coverage, args.min_total_coverage, args.expr_filter, args.min_TPM, args.gene_TPM_file)
 		log_settings(work_dir, args, 'w')
 
-	elif args.command == "prepare-bam":
-		prepare_bam_files(work_dir, args.bam, args.file_handle, args.genome_fasta, args.NPROC)
-		log_settings(work_dir, args, 'a')
-
-	elif args.command == "prepare-multi-bam":
-		prepare_multi_bam(work_dir, args.samples, args.genome_fasta, args.bam_filename, args.NPROC)
-		log_settings(work_dir, args, 'a')
-
 	elif args.command == "calculate-PSI":
-		if all([ os.path.exists(args.exitrons_info), os.path.exists(args.uniq) ]):
-			calculate_PSI(work_dir, args.exitrons_info, args.uniq, args.file_handle, args.NPROC)
+		if all([ os.path.exists(args.exitrons_info), os.path.exists(args.bam) ]):
+			calculate_PSI(work_dir, args.exitrons_info, args.quant_mode, args.bam, args.file_handle, args.NPROC)
 			log_settings(work_dir, args, 'a')
 		else:
 			sys.stderr.write("One (or multiple) input files could not be found.")
 
 	elif args.command == "calculate-multi-PSI":
-		calculate_multi_PSI(work_dir, args.samples, args.exitrons_info, add_slash(args.bam_dir), args.NPROC)
+		#calculate_multi_PSI(work_dir, args.samples, args.exitrons_info, add_slash(args.bam_dir), args.NPROC)
+		calculate_multi_PSI(work_dir, args.samples, args.exitrons_info, args.quant_mode, args.bam_filename, args.NPROC)
 		log_settings(work_dir, args, 'a')
 
 	elif args.command == "compare":
@@ -740,3 +700,6 @@ if __name__ == '__main__':
 # * Added missing gene_id exception in the expr-filter for exitron discovery
 # * Changed compare --strict limits to only pertain to the coverage and not the read balance
 # * Added connected dotplots for the events with a p-value below 0.05
+
+# Changes for 0.6.0
+# * Moved away from the unique bam file creation and directly use the STAR output
