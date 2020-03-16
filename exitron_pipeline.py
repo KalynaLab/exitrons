@@ -200,7 +200,7 @@ def quality_score(A, B, C, D, cov):
 
 	return RS, balance
 
-def get_exitron_coverage(exitron_id, bam_file, quant_mode, i, N):
+def get_exitron_coverage(exitron_id, bam_file, quant_mode, i, nth):
 
 	""" Count the coverage per position in the A, B, and C regions based
 		on the CIGAR signatures of the aligned reads.
@@ -279,7 +279,7 @@ def get_exitron_coverage(exitron_id, bam_file, quant_mode, i, N):
 			except IndexError: # Skip the empty lines appended to the stdout
 				pass
 
-	printProgressBar(0, N)
+	printProgressBar(0, nth)
 
 	return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
 
