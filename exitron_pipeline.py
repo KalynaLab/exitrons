@@ -279,8 +279,10 @@ def get_exitron_coverage(exitron_id, bam_file, quant_mode):
 			except IndexError: # Skip the empty lines appended to the stdout
 				pass
 
+	print(nth, N_total)
 	printProgressBar(nth, N_total)
 	nth += 1
+	print(nth, N_total)
 
 	return { 'A': A, 'B': B, 'C': C, 'D': D, 'cov': [ EICov[x] for x in EICov ] }
 
