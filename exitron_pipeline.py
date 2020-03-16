@@ -306,6 +306,9 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 	import warnings
 	from multiprocessing import Pool
 
+	# Make sure the BAM file is indexed
+	assert any([ os.file.exists(bam_file.replace('bam', 'bai'), os.file.exists(bam_file+'.bai')) ]),"BAM index file missing. Please run \"samtools index <bam_file>\" and try again".
+
     # Read exitron info
 	rc, info = {}, {}
 	for line in open(exitron_info):
