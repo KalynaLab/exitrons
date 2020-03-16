@@ -331,6 +331,8 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 	with Pool(processes=NPROC) as p:
 		rc = dict(zip(exitrons, p.starmap(get_exitron_coverage, job_args)))
 
+	printProgressBar(N, N)
+
     # Calculate PSI and output
 	with open("{}{}.psi".format(work_dir, file_handle), 'w') as fout:
 		fout.write( "Exitron ID\tTranscript ID\tGene ID\tGene Symbol\tEI length (nt)\tEI length is x3\tClassic PSI\tNew PSI\tCoverage Score\tRead Balance\tA\tB\tC\tD\tMin/Mean/Median/Max\n" )
