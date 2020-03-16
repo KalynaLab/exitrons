@@ -8,6 +8,7 @@ import random
 import argparse
 import subprocess
 import numpy as np
+import multiprocessing
 from subprocess import Popen, PIPE
 from natsort import natsorted
 from scipy import stats
@@ -318,7 +319,6 @@ def calculate_PSI(work_dir, exitron_info, quant_mode, bam_file, file_handle, NPR
 	"""
 
 	import warnings
-	import multiprocessing
 	from multiprocessing import Pool
 
 	# Make sure the BAM file is indexed
