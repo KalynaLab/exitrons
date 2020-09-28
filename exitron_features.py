@@ -416,7 +416,7 @@ def rescale_score(PWM_score, ss_min, ss_max):
 
     return norm_score
 
-def score_sites(work_dir, bkgd_fa, test_fa, PWM5_file, PWM3_file, five_prime_region, three_prime_region, file_handle):
+def score_sites(work_dir, test_fa, PWM5_file, PWM3_file, five_prime_region, three_prime_region, file_handle):
 
 	# POTENTIAL TO-DO: MAYBE IT WOULD BE BETTER TO SCALE AGAINST THE MINIMUM
 	# AND MAXIMAL SCORES OF THE PWM, INSTEAD OF AGAINST A BACKGROUND SET
@@ -520,7 +520,7 @@ if __name__ == '__main__':
 	parser_d.add_argument('--exitron-pos', required=True, help="Exitron position on reference transcript protein sequences.")
 
 	parser_e = subparsers.add_parser("score-sites", help="Score splice sites based on supplied PWMs.")
-	parser_e.add_argument('-b', '--bkgd', required=True, help="Background fasta sequences for score scaling.")
+	#parser_e.add_argument('-b', '--bkgd', required=True, help="Background fasta sequences for score scaling.")
 	parser_e.add_argument('-t', '--test', required=True, help="Fasta sequences to score.")
 	parser_e.add_argument('--PWM5', required=True, help="5' splice site PWM file.")
 	parser_e.add_argument('--PWM3', required=True, help="3' splice site PWM file.")
@@ -564,10 +564,11 @@ if __name__ == '__main__':
 			args.five_prime_region = "-3,+6"
 			args.three_prime_region = "-6,+3"
 
-		score_sites(work_dir, args.bkgd, args.test, args.PWM5, args.PWM3, args.five_prime_region, args.three_prime_region, args.file_handle)
+		score_sites(work_dir, args.test, args.PWM5, args.PWM3, args.five_prime_region, args.three_prime_region, args.file_handle)
 
 	elif args.command == "misc":
 		get_misc(work_dir, args.fasta, args.length, args.gc, args.dinu)
 
 # Update log:
 # * 11-12-2019: fixed mistake with relative positioning of negative strand exitrons
+# * 04-05-2020: Removed score-sites background fasta parameter
